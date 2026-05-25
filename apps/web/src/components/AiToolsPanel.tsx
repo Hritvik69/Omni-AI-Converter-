@@ -361,7 +361,7 @@ export function AiToolsPanel() {
 
         {!isApiConfigured ? (
           <div className="mt-5 rounded-xl border border-neon-cyan/25 bg-neon-cyan/10 px-4 py-3 text-sm font-bold leading-6 text-slate-100">
-            Demo mode is live. Browser encryption works here; server AI tools need `NEXT_PUBLIC_API_URL` after the API is deployed.
+            Frontend preview is live. Browser encryption works now; cloud AI tools will switch on when the backend service is connected.
           </div>
         ) : null}
 

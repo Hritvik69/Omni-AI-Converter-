@@ -6,7 +6,7 @@ export const isApiConfigured =
   process.env.NODE_ENV !== "production";
 
 export const API_NOT_CONFIGURED_MESSAGE =
-  "Live demo mode: connect the backend API by setting NEXT_PUBLIC_API_URL in your hosting environment.";
+  "Cloud processing is not connected yet for this live preview.";
 
 export type AuthTokenGetter = () => Promise<string | null>;
 

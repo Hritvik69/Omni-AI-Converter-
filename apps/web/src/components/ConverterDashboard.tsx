@@ -265,7 +265,7 @@ export function ConverterDashboard() {
 
           {!isApiConfigured ? (
             <div className="mt-5 rounded-xl border border-neon-cyan/25 bg-neon-cyan/10 px-4 py-3 text-sm font-bold leading-6 text-slate-100">
-              Demo mode is live. Add `NEXT_PUBLIC_API_URL` in Vercel after deploying the API to enable real uploads and conversions.
+              Frontend preview is live. Real cloud conversions will switch on when the backend service is connected.
             </div>
           ) : null}
 
