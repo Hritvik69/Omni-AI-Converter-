@@ -12,6 +12,7 @@ packages/shared          Shared validation schemas and TypeScript contracts
 prisma/schema.prisma     PostgreSQL data model
 docker/*.Dockerfile      Production container images
 docs/DEPLOYMENT.md       Cloud deployment guide
+render.yaml              One-click Render backend blueprint for demos
 ```
 
 ## Real Engines
@@ -33,6 +34,24 @@ docker compose up --build
 ```
 
 Open `http://localhost:3000`. The API runs on `http://localhost:4000`, Postgres on `5432`, Redis on `6379`, and MinIO on `9000`/`9001`.
+
+## Fast Live Demo Deploy
+
+The easiest public demo is:
+
+1. Deploy `apps/web` on Vercel.
+2. Deploy the backend from `render.yaml` on Render. It runs the API and worker together in one Docker web service.
+3. Create managed services:
+   - Postgres: Neon or Render Postgres.
+   - Redis: Upstash Redis TCP URL.
+   - S3 storage: Cloudflare R2 or any S3-compatible bucket.
+4. Add the backend URL to Vercel:
+
+```text
+NEXT_PUBLIC_API_URL=https://your-render-backend.onrender.com
+```
+
+For a no-login demo, `ALLOW_DEMO_AUTH=true` lets uploads and conversions run without Clerk. For real users, set `ALLOW_DEMO_AUTH=false` and add Clerk keys.
 
 ## Local Node Run (no Docker app containers)
 

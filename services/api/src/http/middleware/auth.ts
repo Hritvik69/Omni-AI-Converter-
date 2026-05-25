@@ -47,13 +47,13 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
 
     const token = extractBearerToken(req);
 
-    if (!token && !isProduction) {
+    if (!token && (!isProduction || env.ALLOW_DEMO_AUTH)) {
       const user = await prisma.user.upsert({
-        where: { clerkId: "dev-user" },
+        where: { clerkId: isProduction ? "demo-user" : "dev-user" },
         create: {
-          clerkId: "dev-user",
-          email: "dev@omniconvert.local",
-          name: "Local Developer"
+          clerkId: isProduction ? "demo-user" : "dev-user",
+          email: isProduction ? "demo@omniconvert.live" : "dev@omniconvert.local",
+          name: isProduction ? "Live Demo" : "Local Developer"
         },
         update: {}
       });

@@ -1,0 +1,46 @@
+# Free/demo backend: one Render web service runs both API and worker.
+# For production scale, deploy docker/api.Dockerfile and docker/worker.Dockerfile separately.
+services:
+  - type: web
+    name: omniconvert-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: docker/fullstack.Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RUN_DB_MIGRATIONS
+        value: "true"
+      - key: ALLOW_DEMO_AUTH
+        value: "true"
+      - key: WORKER_CONCURRENCY
+        value: "1"
+      - key: MAX_UPLOAD_BYTES
+        value: "104857600"
+      - key: UPLOAD_CHUNK_BYTES
+        value: "4194304"
+      - key: CLAMAV_REQUIRED
+        value: "false"
+      - key: AWS_REGION
+        value: auto
+      - key: S3_FORCE_PATH_STYLE
+        value: "false"
+      - key: WEB_ORIGIN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_PUBLIC_ENDPOINT
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false

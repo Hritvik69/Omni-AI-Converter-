@@ -1,0 +1,13 @@
+.git
+.next
+node_modules
+coverage
+tmp
+uploads
+storage
+*.log
+*.tsbuildinfo
+.env
+.env.*
+**/dist
+apps/web/.next

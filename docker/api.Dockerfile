@@ -19,4 +19,4 @@ RUN npx prisma generate
 RUN npm run build -w @omniconvert/shared && npm run build -w @omniconvert/api
 
 EXPOSE 4000
-CMD ["node", "services/api/dist/server.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node services/api/dist/server.js"]
