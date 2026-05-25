@@ -2,9 +2,9 @@
 .next
 node_modules
 coverage
-tmp
-uploads
-storage
+/tmp
+/uploads
+/storage
 *.log
 *.tsbuildinfo
 .env

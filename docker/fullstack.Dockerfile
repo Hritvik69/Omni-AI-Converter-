@@ -31,6 +31,7 @@ COPY packages/shared/src ./packages/shared/src
 COPY services/api/package.json ./services/api/package.json
 COPY services/api/tsconfig.json ./services/api/tsconfig.json
 COPY services/api/src ./services/api/src
+RUN test -f services/api/src/uploads/session-store.ts
 COPY services/worker/package.json ./services/worker/package.json
 COPY services/worker/tsconfig.json ./services/worker/tsconfig.json
 COPY services/worker/src ./services/worker/src
@@ -41,6 +42,7 @@ RUN npx prisma generate
 RUN npm run build -w @omniconvert/shared \
   && npm run build -w @omniconvert/api \
   && npm run build -w @omniconvert/worker
+RUN test -f services/api/dist/uploads/session-store.js
 RUN chmod +x /app/docker/start-fullstack.sh
 
 EXPOSE 4000
