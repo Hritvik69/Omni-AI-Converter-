@@ -6,9 +6,9 @@ coverage
 .env.*
 !.env.example
 !.env.production.example
-uploads
-tmp
-storage
+/uploads
+/tmp
+/storage
 *.log
 *.tsbuildinfo
 prisma/migrations/*/migration_lock.toml
