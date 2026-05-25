@@ -1,4 +1,12 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+
+export const API_URL = configuredApiUrl ?? "http://localhost:4000";
+export const isApiConfigured =
+  Boolean(configuredApiUrl) ||
+  process.env.NODE_ENV !== "production";
+
+export const API_NOT_CONFIGURED_MESSAGE =
+  "Live demo mode: connect the backend API by setting NEXT_PUBLIC_API_URL in your hosting environment.";
 
 export type AuthTokenGetter = () => Promise<string | null>;
 
@@ -7,6 +15,8 @@ export async function apiFetch<T>(
   options: RequestInit = {},
   getToken?: AuthTokenGetter
 ): Promise<T> {
+  if (!isApiConfigured) throw new Error(API_NOT_CONFIGURED_MESSAGE);
+
   const token = getToken ? await getToken() : null;
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -26,6 +36,7 @@ export async function apiFetch<T>(
 }
 
 export function websocketUrl(token?: string | null): string {
+  if (!isApiConfigured) return "";
   const base = new URL(API_URL);
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   base.pathname = "/ws";

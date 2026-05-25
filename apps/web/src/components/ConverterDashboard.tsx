@@ -19,7 +19,7 @@ import {
   Video
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { apiFetch, websocketUrl } from "../lib/api";
+import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, websocketUrl } from "../lib/api";
 import { defaultTargets, extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
@@ -89,6 +89,7 @@ export function ConverterDashboard() {
     let cancelled = false;
 
     async function connect() {
+      if (!isApiConfigured) return;
       const token = await getToken().catch(() => null);
       if (cancelled) return;
       socket = new WebSocket(websocketUrl(token));
@@ -147,6 +148,17 @@ export function ConverterDashboard() {
   const completedCount = useMemo(() => rows.filter((row) => row.status === "completed").length, [rows]);
 
   async function startConversions() {
+    if (!isApiConfigured) {
+      setRows((current) =>
+        current.map((item) =>
+          item.status === "ready"
+            ? { ...item, status: "failed", stage: "backend not connected", error: API_NOT_CONFIGURED_MESSAGE }
+            : item
+        )
+      );
+      return;
+    }
+
     const ready = rows.filter((row) => row.status === "ready");
     for (const row of ready) {
       const file = fileStore.current.get(row.id);
@@ -198,6 +210,7 @@ export function ConverterDashboard() {
   async function exportZip() {
     const jobIds = rows.filter((row) => row.status === "completed" && row.jobId).map((row) => row.jobId!);
     if (!jobIds.length) return;
+    if (!isApiConfigured) throw new Error(API_NOT_CONFIGURED_MESSAGE);
     const token = await getToken();
     const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/conversions/zip`, {
       method: "POST",
@@ -249,6 +262,12 @@ export function ConverterDashboard() {
               </button>
             </div>
           </div>
+
+          {!isApiConfigured ? (
+            <div className="mt-5 rounded-xl border border-neon-cyan/25 bg-neon-cyan/10 px-4 py-3 text-sm font-bold leading-6 text-slate-100">
+              Demo mode is live. Add `NEXT_PUBLIC_API_URL` in Vercel after deploying the API to enable real uploads and conversions.
+            </div>
+          ) : null}
 
           <label
             onDragOver={(event) => {

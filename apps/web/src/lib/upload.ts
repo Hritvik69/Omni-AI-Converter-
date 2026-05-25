@@ -1,4 +1,4 @@
-import { API_URL, type AuthTokenGetter } from "./api";
+import { API_NOT_CONFIGURED_MESSAGE, API_URL, isApiConfigured, type AuthTokenGetter } from "./api";
 
 type UploadSessionResponse = {
   uploadId: string;
@@ -23,6 +23,8 @@ export async function uploadFileInChunks(args: {
   getToken: AuthTokenGetter;
   onProgress: (percent: number) => void;
 }): Promise<UploadCompleteResponse> {
+  if (!isApiConfigured) throw new Error(API_NOT_CONFIGURED_MESSAGE);
+
   const sessionResponse = await fetch(`${API_URL}/api/uploads/sessions`, {
     method: "POST",
     headers: {

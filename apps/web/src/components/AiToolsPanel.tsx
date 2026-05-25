@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { Bot, Download, FileScan, ImageOff, Loader2, Lock, Mic2, Sparkles, Unlock, UploadCloud, Wand2 } from "lucide-react";
-import { apiFetch, websocketUrl } from "../lib/api";
+import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, websocketUrl } from "../lib/api";
 import { extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
@@ -206,6 +206,7 @@ export function AiToolsPanel() {
     let socket: WebSocket | null = null;
     let cancelled = false;
     async function connect() {
+      if (!isApiConfigured) return;
       const token = await getToken().catch(() => null);
       if (cancelled) return;
       socket = new WebSocket(websocketUrl(token));
@@ -311,6 +312,13 @@ export function AiToolsPanel() {
       await runEncryptionTool();
       return;
     }
+    if (!isApiConfigured) {
+      setStatus("failed");
+      setStage("backend not connected");
+      setProgress(100);
+      setError(API_NOT_CONFIGURED_MESSAGE);
+      return;
+    }
     try {
       resetRunState();
       setStatus("uploading");
@@ -350,6 +358,12 @@ export function AiToolsPanel() {
       <div className="glass rounded-2xl p-6">
         <p className="text-xs font-bold uppercase tracking-[0.28em] text-neon-cyan">AI Workbench</p>
         <h1 className="mt-2 text-3xl font-black text-white">AI Tools</h1>
+
+        {!isApiConfigured ? (
+          <div className="mt-5 rounded-xl border border-neon-cyan/25 bg-neon-cyan/10 px-4 py-3 text-sm font-bold leading-6 text-slate-100">
+            Demo mode is live. Browser encryption works here; server AI tools need `NEXT_PUBLIC_API_URL` after the API is deployed.
+          </div>
+        ) : null}
 
         <div className="mt-8 grid gap-6 lg:grid-cols-[0.75fr_1.25fr]">
           <div className="space-y-3">
