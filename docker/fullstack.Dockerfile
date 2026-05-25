@@ -36,7 +36,7 @@ COPY services/worker/tsconfig.json ./services/worker/tsconfig.json
 COPY services/worker/src ./services/worker/src
 COPY docker/start-fullstack.sh ./docker/start-fullstack.sh
 
-RUN npm install
+RUN npm install --include=dev
 RUN npx prisma generate
 RUN npm run build -w @omniconvert/shared \
   && npm run build -w @omniconvert/api \

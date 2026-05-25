@@ -29,7 +29,7 @@ COPY apps/web/postcss.config.mjs ./apps/web/postcss.config.mjs
 COPY apps/web/tailwind.config.ts ./apps/web/tailwind.config.ts
 COPY apps/web/src ./apps/web/src
 
-RUN npm install
+RUN npm install --include=dev
 RUN npm run build -w @omniconvert/shared && npm run build -w @omniconvert/web
 
 EXPOSE 3000

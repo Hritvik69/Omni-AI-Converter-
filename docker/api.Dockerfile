@@ -14,7 +14,7 @@ COPY services/api/package.json ./services/api/package.json
 COPY services/api/tsconfig.json ./services/api/tsconfig.json
 COPY services/api/src ./services/api/src
 
-RUN npm install
+RUN npm install --include=dev
 RUN npx prisma generate
 RUN npm run build -w @omniconvert/shared && npm run build -w @omniconvert/api
 
