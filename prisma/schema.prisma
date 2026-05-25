@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AssetKind {
+  ORIGINAL
+  OUTPUT
+  THUMBNAIL
+  SUBTITLE
+  ARCHIVE
+}
+
+enum StorageProvider {
+  S3
+  LOCAL
+}
+
+enum JobKind {
+  CONVERSION
+  AI
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum WebhookStatus {
+  ACTIVE
+  PAUSED
+  FAILED
+}
+
+model User {
+  id              String            @id @default(uuid())
+  clerkId         String            @unique
+  email           String?
+  name            String?
+  plan            String            @default("free")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  assets          FileAsset[]
+  jobs            ConversionJob[]
+  apiKeys         ApiKey[]
+  presets         ConversionPreset[]
+  webhooks        WebhookEndpoint[]
+}
+
+model FileAsset {
+  id             String          @id @default(uuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind           AssetKind       @default(ORIGINAL)
+  storage        StorageProvider @default(S3)
+  bucket         String?
+  storageKey     String
+  originalName   String
+  mimeType       String
+  extension      String
+  sizeBytes      BigInt
+  checksumSha256 String?
+  etag           String?
+  metadata       Json?
+  expiresAt      DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  inputJobs      ConversionJob[] @relation("InputAsset")
+  outputJobs     ConversionJob[] @relation("OutputAsset")
+
+  @@index([userId, createdAt])
+  @@index([storageKey])
+}
+
+model ConversionJob {
+  id            String      @id @default(uuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind          JobKind     @default(CONVERSION)
+  status        JobStatus   @default(QUEUED)
+  progress      Int         @default(0)
+  stage         String      @default("queued")
+  error         String?
+  queueJobId    String?
+  attempts      Int         @default(0)
+  sourceFormat  String
+  targetFormat  String
+  tool          String?
+  options       Json        @default("{}")
+  inputAssetId  String
+  inputAsset    FileAsset   @relation("InputAsset", fields: [inputAssetId], references: [id], onDelete: Restrict)
+  outputAssetId String?
+  outputAsset   FileAsset?  @relation("OutputAsset", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([queueJobId])
+}
+
+model ConversionPreset {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  target    String
+  options   Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, name])
+}
+
+model WebhookEndpoint {
+  id        String        @id @default(uuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  secret    String
+  status    WebhookStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([userId, status])
+}
+
+model ApiKey {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  prefix       String
+  keyHash      String
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  revokedAt    DateTime?
+
+  @@unique([prefix])
+  @@index([userId, revokedAt])
+}

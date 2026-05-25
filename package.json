@@ -1,0 +1,29 @@
+{
+  "name": "omniconvert-ai",
+  "private": true,
+  "version": "1.0.0",
+  "description": "OmniConvert AI production-grade universal file conversion platform.",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:infra": "docker compose up -d postgres redis minio create-bucket",
+    "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
+    "dev": "npm run dev -w @omniconvert/api & npm run dev -w @omniconvert/worker & npm run dev -w @omniconvert/web",
+    "build": "npm run build -ws",
+    "typecheck": "npm run typecheck -ws",
+    "lint": "npm run lint -w @omniconvert/web",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:studio": "prisma studio"
+  },
+  "devDependencies": {
+    "prisma": "^6.8.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.18.0"
+  }
+}
