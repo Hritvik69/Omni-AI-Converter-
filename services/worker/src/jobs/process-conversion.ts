@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { lookup as lookupMime } from "mime-types";
 import { conversionOptionsSchema, type AiToolId, type ConversionOptions } from "@omniconvert/shared";
 import { prisma } from "../lib/prisma.js";
-import { downloadS3ObjectToFile, putLocalFileToS3 } from "../lib/storage.js";
+import { downloadS3ObjectToFile, putLocalFileToS3, storageKind } from "../lib/storage.js";
 import { withTempDir } from "../lib/temp.js";
 import { updateJobProgress } from "./progress.js";
 import { deliverJobWebhooks } from "./webhooks.js";
@@ -196,7 +196,7 @@ export async function processConversionJob(
         data: {
           userId: job.userId,
           kind: "OUTPUT",
-          storage: "S3",
+          storage: storageKind(),
           bucket: stored.bucket,
           storageKey: stored.key,
           originalName: outputFileName,

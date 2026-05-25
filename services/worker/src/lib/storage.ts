@@ -1,5 +1,6 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import path from "node:path";
+import { copyFile, mkdir, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { env } from "../config/env.js";
@@ -17,11 +18,33 @@ export const s3 = new S3Client({
       : undefined
 });
 
+export function storageKind(): "S3" | "LOCAL" {
+  return env.STORAGE_DRIVER === "local" ? "LOCAL" : "S3";
+}
+
+export function isLocalStorage(): boolean {
+  return env.STORAGE_DRIVER === "local";
+}
+
+export function localStoragePath(key: string): string {
+  const baseDir = path.resolve(env.LOCAL_STORAGE_DIR);
+  const resolved = path.resolve(baseDir, key);
+  if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) {
+    throw new Error(`Invalid storage key: ${key}`);
+  }
+  return resolved;
+}
+
 export async function downloadS3ObjectToFile(args: {
   bucket?: string | null;
   key: string;
   localPath: string;
 }): Promise<void> {
+  if (isLocalStorage()) {
+    await copyFile(localStoragePath(args.key), args.localPath);
+    return;
+  }
+
   const response = await s3.send(
     new GetObjectCommand({
       Bucket: args.bucket ?? env.S3_BUCKET,
@@ -39,6 +62,17 @@ export async function putLocalFileToS3(args: {
   metadata?: Record<string, string>;
 }): Promise<{ bucket: string; key: string; sizeBytes: number; etag?: string }> {
   const fileStat = await stat(args.localPath);
+  if (isLocalStorage()) {
+    const outputPath = localStoragePath(args.key);
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await copyFile(args.localPath, outputPath);
+    return {
+      bucket: "local",
+      key: args.key,
+      sizeBytes: fileStat.size
+    };
+  }
+
   const result = await s3.send(
     new PutObjectCommand({
       Bucket: env.S3_BUCKET,

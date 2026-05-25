@@ -1,9 +1,11 @@
 import { Router } from "express";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import archiver from "archiver";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
-import type { ConversionJob, Prisma } from "@prisma/client";
+import type { ConversionJob, FileAsset, Prisma } from "@prisma/client";
 import {
   createAiJobSchema,
   createConversionSchema,
@@ -11,7 +13,7 @@ import {
 } from "@omniconvert/shared";
 import { prisma } from "../../lib/prisma.js";
 import { conversionQueue } from "../../lib/queue.js";
-import { getDownloadUrl, s3 } from "../../lib/storage.js";
+import { getDownloadUrl, localStoragePath, s3 } from "../../lib/storage.js";
 import { env } from "../../config/env.js";
 import { publishJobEvent } from "../../realtime/events.js";
 import { assertConversionTarget } from "../../validation/file-policy.js";
@@ -42,6 +44,27 @@ function jobDto(job: ConversionJob) {
     updatedAt: job.updatedAt,
     completedAt: job.completedAt
   };
+}
+
+function apiBaseUrl(req: { protocol: string; get(name: string): string | undefined }): string {
+  const configured = env.PUBLIC_API_URL?.trim();
+  if (configured) return configured.replace(/\/$/, "");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function localAssetDownloadUrl(
+  req: { protocol: string; get(name: string): string | undefined },
+  assetId: string
+): string {
+  return `${apiBaseUrl(req)}/api/conversions/assets/${assetId}/download-file`;
+}
+
+async function assetDownloadUrl(
+  req: { protocol: string; get(name: string): string | undefined },
+  asset: FileAsset
+): Promise<string> {
+  if (asset.storage === "LOCAL") return localAssetDownloadUrl(req, asset.id);
+  return getDownloadUrl(asset.storageKey, asset.originalName);
 }
 
 async function emitQueued(userId: string, jobId: string): Promise<void> {
@@ -171,7 +194,7 @@ conversionsRouter.get("/history", requireAuth, async (req, res, next) => {
                 id: job.outputAsset.id,
                 name: job.outputAsset.originalName,
                 sizeBytes: Number(job.outputAsset.sizeBytes),
-                downloadUrl: await getDownloadUrl(job.outputAsset.storageKey, job.outputAsset.originalName)
+                downloadUrl: await assetDownloadUrl(req, job.outputAsset)
               }
             : null
         }))
@@ -191,9 +214,33 @@ conversionsRouter.get("/assets/:assetId/download", requireAuth, async (req, res,
     if (!asset) throw new HttpError(404, "Asset not found");
 
     res.json({
-      downloadUrl: await getDownloadUrl(asset.storageKey, asset.originalName),
+      downloadUrl: await assetDownloadUrl(req, asset),
       expiresInSeconds: env.SIGNED_URL_TTL_SECONDS
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+conversionsRouter.get("/assets/:assetId/download-file", requireAuth, async (req, res, next) => {
+  try {
+    const assetId = requiredParam(req.params.assetId, "assetId");
+    const asset = await prisma.fileAsset.findFirst({
+      where: { id: assetId, userId: req.authUser.id }
+    });
+    if (!asset) throw new HttpError(404, "Asset not found");
+
+    if (asset.storage !== "LOCAL") {
+      res.redirect(await getDownloadUrl(asset.storageKey, asset.originalName));
+      return;
+    }
+
+    const localPath = localStoragePath(asset.storageKey);
+    await stat(localPath);
+    res.setHeader("Content-Type", asset.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", Number(asset.sizeBytes).toString());
+    res.setHeader("Content-Disposition", `attachment; filename="${asset.originalName.replaceAll('"', "")}"`);
+    createReadStream(localPath).pipe(res);
   } catch (error) {
     next(error);
   }
@@ -224,7 +271,7 @@ conversionsRouter.get("/:id", requireAuth, async (req, res, next) => {
           ? {
               id: job.outputAsset.id,
               name: job.outputAsset.originalName,
-              downloadUrl: await getDownloadUrl(job.outputAsset.storageKey, job.outputAsset.originalName)
+              downloadUrl: await assetDownloadUrl(req, job.outputAsset)
             }
           : null
       }
@@ -258,6 +305,13 @@ conversionsRouter.post("/zip", requireAuth, async (req, res, next) => {
 
     for (const job of jobs) {
       if (!job.outputAsset) continue;
+      if (job.outputAsset.storage === "LOCAL") {
+        archive.append(createReadStream(localStoragePath(job.outputAsset.storageKey)), {
+          name: job.outputAsset.originalName
+        });
+        continue;
+      }
+
       const object = await s3.send(
         new GetObjectCommand({
           Bucket: job.outputAsset.bucket ?? env.S3_BUCKET,

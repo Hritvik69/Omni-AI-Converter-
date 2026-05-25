@@ -10,7 +10,7 @@ Deploy the platform as three independently scalable services:
 
 Postgres, Redis, and S3 must be managed services in production. Use CloudFront or another CDN in front of signed S3 downloads when traffic grows.
 
-For a low-cost demo, the repository also includes `render.yaml` and `docker/fullstack.Dockerfile`. That path runs the API and worker in one Render web service, which is simpler to launch but not the recommended production shape for heavy conversions.
+For a low-cost demo, the repository also includes `render.yaml` and `docker/fullstack.Dockerfile`. That path runs the API and worker in one Render web service, creates Render Postgres and Render Key Value, and uses local container storage. It is simpler to launch but not the recommended production shape for heavy conversions or durable file retention.
 
 ## Required Environment
 
@@ -23,6 +23,15 @@ Set every variable in `.env.example`. Production must provide:
 - `OPENAI_API_KEY` or `GEMINI_API_KEY` for AI text features
 
 For a public demo without login, set `ALLOW_DEMO_AUTH=true` on the API service. This uses one shared demo user. Turn it off when Clerk auth is configured.
+
+For the one-service demo, use:
+
+```text
+STORAGE_DRIVER=local
+LOCAL_STORAGE_DIR=/app/storage
+```
+
+This keeps uploads and outputs on the backend container filesystem. Use S3/R2 for production durability.
 
 Cloudflare R2 works as the S3 layer with:
 
@@ -73,16 +82,14 @@ Uploads and outputs are stored with 7-day expiry metadata. Configure S3 lifecycl
 
 ### Simple Render Backend
 
-1. Create Neon Postgres, Upstash Redis, and Cloudflare R2.
-2. In Render, create a Blueprint from this GitHub repository. Render reads `render.yaml`.
-3. Fill the secret values Render asks for:
-   - `WEB_ORIGIN`: your Vercel URL, for example `https://your-app.vercel.app`
-   - `DATABASE_URL`: your Postgres connection string
-   - `REDIS_URL`: your Redis TCP URL, usually `rediss://...`
-   - `S3_BUCKET`, `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`
-   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
-4. Wait for Render to deploy. Confirm `https://your-render-backend.onrender.com/health` returns `ok: true`.
-5. In Vercel, set `NEXT_PUBLIC_API_URL` to the Render backend URL and redeploy the web app.
+1. In Render, create a Blueprint from this GitHub repository. Render reads `render.yaml`.
+2. Render creates:
+   - `omniconvert-backend`
+   - `omniconvert-db`
+   - `omniconvert-redis`
+3. Wait for Render to deploy. Confirm `https://your-render-backend.onrender.com/health` returns `ok: true`.
+4. In Vercel, set `NEXT_PUBLIC_API_URL` to the Render backend URL and redeploy the web app.
+5. Replace `WEB_ORIGIN=*` with your exact Vercel URL when you move beyond demo mode.
 
 ### Scaled Production
 

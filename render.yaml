@@ -16,6 +16,14 @@ services:
         value: "true"
       - key: ALLOW_DEMO_AUTH
         value: "true"
+      - key: WEB_ORIGIN
+        value: "*"
+      - key: STORAGE_DRIVER
+        value: local
+      - key: LOCAL_STORAGE_DIR
+        value: /app/storage
+      - key: S3_BUCKET
+        value: local
       - key: WORKER_CONCURRENCY
         value: "1"
       - key: MAX_UPLOAD_BYTES
@@ -28,19 +36,25 @@ services:
         value: auto
       - key: S3_FORCE_PATH_STYLE
         value: "false"
-      - key: WEB_ORIGIN
-        sync: false
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: omniconvert-db
+          property: connectionString
       - key: REDIS_URL
-        sync: false
-      - key: S3_BUCKET
-        sync: false
-      - key: S3_ENDPOINT
-        sync: false
-      - key: S3_PUBLIC_ENDPOINT
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
+        fromService:
+          type: keyvalue
+          name: omniconvert-redis
+          property: connectionString
+
+  - type: keyvalue
+    name: omniconvert-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: omniconvert-db
+    plan: free
+    databaseName: omniconvert
+    user: omniconvert
+    ipAllowList: []

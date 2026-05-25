@@ -41,17 +41,14 @@ The easiest public demo is:
 
 1. Deploy `apps/web` on Vercel.
 2. Deploy the backend from `render.yaml` on Render. It runs the API and worker together in one Docker web service.
-3. Create managed services:
-   - Postgres: Neon or Render Postgres.
-   - Redis: Upstash Redis TCP URL.
-   - S3 storage: Cloudflare R2 or any S3-compatible bucket.
+3. Render creates Postgres and Redis from the blueprint. The demo uses local container storage for converted files.
 4. Add the backend URL to Vercel:
 
 ```text
 NEXT_PUBLIC_API_URL=https://your-render-backend.onrender.com
 ```
 
-For a no-login demo, `ALLOW_DEMO_AUTH=true` lets uploads and conversions run without Clerk. For real users, set `ALLOW_DEMO_AUTH=false` and add Clerk keys.
+For a no-login demo, `ALLOW_DEMO_AUTH=true` lets uploads and conversions run without Clerk. For real users, set `ALLOW_DEMO_AUTH=false`, add Clerk keys, and switch `STORAGE_DRIVER=s3` with Cloudflare R2 or another S3-compatible bucket.
 
 ## Local Node Run (no Docker app containers)
 

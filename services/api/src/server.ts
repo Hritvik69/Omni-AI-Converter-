@@ -16,6 +16,7 @@ import { logger } from "./lib/logger.js";
 
 const app = express();
 const server = http.createServer(app);
+const allowedOrigins = env.WEB_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
 
 app.set("trust proxy", 1);
 app.use(
@@ -25,7 +26,13 @@ app.use(
 );
 app.use(
   cors({
-    origin: env.WEB_ORIGIN.split(",").map((origin) => origin.trim()),
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin not allowed: ${origin}`));
+    },
     credentials: true
   })
 );

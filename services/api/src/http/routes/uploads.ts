@@ -8,7 +8,7 @@ import { createUploadSession, deleteUploadSession, getUploadSession } from "../.
 import { mergeChunks, writeChunkFromRequest } from "../../uploads/chunks.js";
 import { validateCompletedFile, sanitizeFileName } from "../../validation/file-policy.js";
 import { scanForMalware } from "../../lib/scan.js";
-import { putLocalFileToS3 } from "../../lib/storage.js";
+import { putLocalFileToS3, storageKind } from "../../lib/storage.js";
 import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
 import { HttpError } from "../middleware/errors.js";
@@ -89,7 +89,7 @@ uploadsRouter.post("/:uploadId/complete", requireAuth, uploadRateLimit, async (r
         id: session.uploadId,
         userId: req.authUser.id,
         kind: "ORIGINAL",
-        storage: "S3",
+        storage: storageKind(),
         bucket: stored.bucket,
         storageKey: stored.key,
         originalName: session.fileName,
