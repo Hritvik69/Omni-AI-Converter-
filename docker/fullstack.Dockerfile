@@ -16,7 +16,7 @@ RUN apt-get update \
     wkhtmltopdf \
     python3 \
     python3-pip \
-    libvips \
+    libvips42 \
     libheif1 \
   && rm -rf /var/lib/apt/lists/*
 
