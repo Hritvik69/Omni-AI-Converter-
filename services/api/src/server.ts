@@ -40,6 +40,22 @@ app.use(morgan("combined"));
 app.use(apiRateLimit);
 app.use(express.json({ limit: "2mb" }));
 
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "omniconvert-api",
+    message: "OmniConvert API is running. Use /health for status and /api/* for API routes.",
+    routes: {
+      health: "/health",
+      uploads: "/api/uploads",
+      conversions: "/api/conversions",
+      presets: "/api/presets",
+      webhooks: "/api/webhooks",
+      apiKeys: "/api/api-keys"
+    }
+  });
+});
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
