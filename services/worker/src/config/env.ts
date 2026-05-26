@@ -48,7 +48,8 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   OPENAI_TRANSCRIPTION_MODEL: z.string().default("whisper-1"),
   OPENAI_TEXT_MODEL: z.string().default("gpt-4.1-mini"),
-  GEMINI_TEXT_MODEL: z.string().default("gemini-2.5-flash")
+  GEMINI_TEXT_MODEL: z.string().default("gemini-2.5-flash"),
+  REMBG_MODEL: z.string().default("u2netp")
 });
 
 export const env = envSchema.parse(process.env);

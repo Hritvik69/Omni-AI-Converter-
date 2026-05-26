@@ -331,7 +331,15 @@ async function transcribeAudioOrVideo(inputPath: string, outputPath: string, res
 }
 
 async function removeBackground(inputPath: string, outputPath: string): Promise<void> {
-  await runCommand(env.REMBG_BIN, ["i", inputPath, outputPath], { timeoutMs: 1000 * 60 * 20 });
+  await runCommand(env.REMBG_BIN, ["i", "-m", env.REMBG_MODEL, inputPath, outputPath], {
+    env: {
+      OMP_NUM_THREADS: "1",
+      OPENBLAS_NUM_THREADS: "1",
+      MKL_NUM_THREADS: "1",
+      NUMEXPR_NUM_THREADS: "1"
+    },
+    timeoutMs: 1000 * 60 * 20
+  });
 }
 
 async function upscaleImage(inputPath: string, outputPath: string): Promise<void> {

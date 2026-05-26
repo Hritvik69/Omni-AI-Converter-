@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 export type RunCommandOptions = {
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   maxOutputBytes?: number;
   onStdout?: (chunk: string) => void | Promise<void>;
@@ -48,6 +49,7 @@ export async function runCommand(
     const child = spawn(command, args, {
       cwd: options.cwd,
       detached: process.platform !== "win32",
+      env: options.env ? { ...process.env, ...options.env } : undefined,
       windowsHide: true
     });
 
