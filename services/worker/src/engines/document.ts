@@ -1,5 +1,5 @@
 import path from "node:path";
-import { rename, stat, writeFile } from "node:fs/promises";
+import { readFile, rename, stat, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import type { ConversionOptions } from "@omniconvert/shared";
 import { env } from "../config/env.js";
@@ -31,6 +31,29 @@ function escapeHtml(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function normalizeHtmlForRendering(html: string): string {
+  const cleaned = html
+    .replace(/^\uFEFF/, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+
+  if (/<meta\s+[^>]*charset\s*=/i.test(cleaned)) return cleaned;
+
+  const charsetMeta = '<meta charset="utf-8">';
+  if (/<head\b[^>]*>/i.test(cleaned)) {
+    return cleaned.replace(/<head\b([^>]*)>/i, `<head$1>${charsetMeta}`);
+  }
+  if (/<html\b[^>]*>/i.test(cleaned)) {
+    return cleaned.replace(/<html\b([^>]*)>/i, `<html$1><head>${charsetMeta}</head>`);
+  }
+
+  return `<!doctype html><html lang="en"><head>${charsetMeta}</head><body>${cleaned}</body></html>`;
+}
+
+async function prepareHtmlForRendering(inputPath: string, outputPath: string): Promise<void> {
+  const html = await readFile(inputPath, "utf8");
+  await writeFile(outputPath, normalizeHtmlForRendering(html), "utf8");
 }
 
 async function convertPdfTextOutput(inputPath: string, outputPath: string, targetFormat: string, workDir: string): Promise<void> {
@@ -100,6 +123,34 @@ export async function convertHtmlToImage(args: {
   await args.onProgress?.(100, "document: html image export complete");
 }
 
+async function convertHtmlToPdf(args: {
+  inputPath: string;
+  outputPath: string;
+  workDir: string;
+  onProgress?: (progress: number, stage: string) => Promise<void>;
+}): Promise<void> {
+  await assertSafeHtmlForImageRender(args.inputPath);
+
+  const normalizedInputPath = path.join(args.workDir, "html-render-input.html");
+  await prepareHtmlForRendering(args.inputPath, normalizedInputPath);
+
+  await args.onProgress?.(35, "document: rendering html page to pdf");
+  await runCommand(
+    env.WKHTMLTOPDF_BIN,
+    [
+      "--quiet",
+      "--disable-local-file-access",
+      "--disable-javascript",
+      "--encoding",
+      "utf-8",
+      normalizedInputPath,
+      args.outputPath
+    ],
+    { timeoutMs: 1000 * 60 * 10 }
+  );
+  await args.onProgress?.(100, "document: html pdf export complete");
+}
+
 export async function convertDocument(args: {
   inputPath: string;
   inputFormat: string;
@@ -136,6 +187,16 @@ export async function convertDocument(args: {
     );
     await moveLibreOfficeOutput(args.workDir, args.inputPath, "docx", args.outputPath);
     await args.onProgress?.(100, "document: pdf imported into docx");
+    return;
+  }
+
+  if (["html", "htm"].includes(source) && target === "pdf") {
+    await convertHtmlToPdf({
+      inputPath: args.inputPath,
+      outputPath: args.outputPath,
+      workDir: args.workDir,
+      onProgress: args.onProgress
+    });
     return;
   }
 

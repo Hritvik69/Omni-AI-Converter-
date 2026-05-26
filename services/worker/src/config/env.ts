@@ -35,6 +35,7 @@ const envSchema = z.object({
   MAGICK_BIN: z.string().default("magick"),
   LIBREOFFICE_BIN: z.string().default("soffice"),
   PANDOC_BIN: z.string().default("pandoc"),
+  WKHTMLTOPDF_BIN: z.string().default("wkhtmltopdf"),
   WKHTMLTOIMAGE_BIN: z.string().default("wkhtmltoimage"),
   GHOSTSCRIPT_BIN: z.string().default("gs"),
   TESSERACT_BIN: z.string().default("tesseract"),
