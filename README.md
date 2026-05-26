@@ -70,6 +70,8 @@ npm run dev:local
 
 Install native binaries for conversions: FFmpeg, FFprobe, LibreOffice, Pandoc, wkhtmltopdf/wkhtmltoimage, Ghostscript, ImageMagick, Tesseract, Poppler, and `rembg` (see `requirements.txt`).
 
+Set `WORKER_CONCURRENCY` higher on larger servers to process multiple queued outputs at once. The demo config uses `2` to keep ALL-format batches moving while staying modest for small hosts.
+
 ## Security
 
 The API implements rate limits, Clerk/API-key auth, MIME validation, extension policy checks, optional ClamAV scanning, temporary upload directories, signed download URLs, and automatic asset expiry metadata. Production deployments should run lifecycle cleanup jobs for expired S3 objects and database rows.

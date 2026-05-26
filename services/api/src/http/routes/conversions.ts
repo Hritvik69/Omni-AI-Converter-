@@ -6,6 +6,7 @@ import { z } from "zod";
 import archiver from "archiver";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import type { ConversionJob, FileAsset, Prisma } from "@prisma/client";
+import { v4 as uuidv4 } from "uuid";
 import {
   createAiJobSchema,
   createConversionSchema,
@@ -81,7 +82,6 @@ async function emitQueued(userId: string, jobId: string): Promise<void> {
 conversionsRouter.post("/", requireAuth, async (req, res, next) => {
   try {
     const input = createConversionSchema.parse(req.body);
-    const jobs = [];
     const plannedJobs: Array<{
       asset: FileAsset;
       targetFormat: string;
@@ -112,27 +112,34 @@ conversionsRouter.post("/", requireAuth, async (req, res, next) => {
       throw new HttpError(422, "A conversion request can create up to 100 jobs");
     }
 
-    for (const plannedJob of plannedJobs) {
-      const job = await prisma.conversionJob.create({
-        data: {
-          userId: req.authUser.id,
-          kind: "CONVERSION",
-          status: "QUEUED",
-          sourceFormat: plannedJob.asset.extension,
-          targetFormat: plannedJob.targetFormat,
-          inputAssetId: plannedJob.asset.id,
-          options: plannedJob.options
-        }
-      });
+    const createdJobs = await prisma.$transaction(
+      plannedJobs.map((plannedJob) => {
+        const id = uuidv4();
+        return prisma.conversionJob.create({
+          data: {
+            id,
+            userId: req.authUser.id,
+            kind: "CONVERSION",
+            status: "QUEUED",
+            queueJobId: id,
+            sourceFormat: plannedJob.asset.extension,
+            targetFormat: plannedJob.targetFormat,
+            inputAssetId: plannedJob.asset.id,
+            options: plannedJob.options
+          }
+        });
+      })
+    );
+    const jobs = createdJobs.map(jobDto);
 
-      const queued = await conversionQueue.add("convert", { conversionJobId: job.id }, { jobId: job.id });
-      await prisma.conversionJob.update({
-        where: { id: job.id },
-        data: { queueJobId: queued.id }
-      });
-      await emitQueued(req.authUser.id, job.id);
-      jobs.push(jobDto(job));
-    }
+    await conversionQueue.addBulk(
+      jobs.map((job) => ({
+        name: "convert",
+        data: { conversionJobId: job.id },
+        opts: { jobId: job.id }
+      }))
+    );
+    await Promise.all(jobs.map((job) => emitQueued(req.authUser.id, job.id)));
 
     res.status(202).json({ jobs });
   } catch (error) {

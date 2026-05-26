@@ -44,6 +44,26 @@ type ConversionResponse = {
 };
 
 const ALL_TARGETS_VALUE = "all";
+const START_CONVERSION_CONCURRENCY = 2;
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  task: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex]!;
+      nextIndex += 1;
+      await task(item);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
 
 function iconFor(ext: string) {
   if (["png", "jpg", "jpeg", "webp", "svg", "gif", "bmp", "tiff", "ico", "heic"].includes(ext)) return ImageIcon;
@@ -162,9 +182,9 @@ export function ConverterDashboard() {
     }
 
     const ready = rows.filter((row) => row.status === "ready");
-    for (const row of ready) {
+    await runWithConcurrency(ready, START_CONVERSION_CONCURRENCY, async (row) => {
       const file = fileStore.current.get(row.id);
-      if (!file) continue;
+      if (!file) return;
       const targets = defaultTargets(row.extension);
       const targetFormats = row.targetFormat === ALL_TARGETS_VALUE ? allTargets(row.extension) : [row.targetFormat];
       if (!targetFormats.length) {
@@ -173,7 +193,7 @@ export function ConverterDashboard() {
             item.id === row.id ? { ...item, status: "failed", stage: "failed", error: `No targets for .${row.extension}` } : item
           )
         );
-        continue;
+        return;
       }
       try {
         setRows((current) => current.map((item) => (item.id === row.id ? { ...item, status: "uploading", stage: "uploading chunks", progress: 1 } : item)));
@@ -206,7 +226,7 @@ export function ConverterDashboard() {
         if (targetFormats.length === 1) {
           const jobId = response.jobs[0]?.id;
           setRows((current) => current.map((item) => (item.id === row.id ? { ...item, uploadId: upload.uploadId, jobId, status: "queued", progress: 42 } : item)));
-          continue;
+          return;
         }
 
         const jobsByTarget = new Map(response.jobs.map((job) => [job.targetFormat, job]));
@@ -231,7 +251,7 @@ export function ConverterDashboard() {
         const message = error instanceof Error ? error.message : "Conversion failed";
         setRows((current) => current.map((item) => (item.id === row.id ? { ...item, status: "failed", stage: "failed", error: message } : item)));
       }
-    }
+    });
   }
 
   function removeRow(id: string) {
