@@ -3,7 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { Bot, Download, FileScan, ImageOff, Loader2, Lock, Mic2, Sparkles, Unlock, UploadCloud, Wand2 } from "lucide-react";
-import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, warmAuthSession, websocketUrl } from "../lib/api";
+import {
+  API_NOT_CONFIGURED_MESSAGE,
+  apiFetch,
+  getDemoSession,
+  getOptionalAuthToken,
+  isApiConfigured,
+  warmAuthSession,
+  websocketUrl
+} from "../lib/api";
 import { extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
@@ -243,9 +251,9 @@ export function AiToolsPanel() {
     async function connect() {
       if (!isApiConfigured) return;
       await warmAuthSession(getToken);
-      const token = await getToken().catch(() => null);
+      const token = await getOptionalAuthToken(getToken);
       if (cancelled) return;
-      socket = new WebSocket(websocketUrl(token));
+      socket = new WebSocket(websocketUrl(token, getDemoSession()));
       socket.onopen = () => {
         attempt = 0;
       };

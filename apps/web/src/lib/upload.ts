@@ -1,4 +1,11 @@
-import { API_NOT_CONFIGURED_MESSAGE, API_URL, isApiConfigured, type AuthTokenGetter } from "./api";
+import {
+  API_NOT_CONFIGURED_MESSAGE,
+  API_URL,
+  authHeaders,
+  isApiConfigured,
+  rememberDemoSessionFromResponse,
+  type AuthTokenGetter
+} from "./api";
 
 type UploadSessionResponse = {
   uploadId: string;
@@ -16,11 +23,6 @@ type UploadCompleteResponse = {
 
 const UPLOAD_CHUNK_CONCURRENCY = 3;
 const UPLOAD_REQUEST_TIMEOUT_MS = 120000;
-
-async function authHeaders(getToken: AuthTokenGetter): Promise<Record<string, string>> {
-  const token = await getToken();
-  return token ? { authorization: `Bearer ${token}` } : {};
-}
 
 async function runWithConcurrency<T>(
   items: T[],
@@ -79,7 +81,7 @@ export async function uploadFileInChunks(args: {
   onProgress: (percent: number) => void;
 }): Promise<UploadCompleteResponse> {
   if (!isApiConfigured) throw new Error(API_NOT_CONFIGURED_MESSAGE);
-  const auth = await authHeaders(args.getToken);
+  let auth = await authHeaders(args.getToken);
 
   const sessionResponse = await fetchWithTimeout(`${API_URL}/api/uploads/sessions`, {
     method: "POST",
@@ -93,6 +95,7 @@ export async function uploadFileInChunks(args: {
       mimeType: args.file.type || "application/octet-stream"
     })
   });
+  rememberDemoSessionFromResponse(sessionResponse);
 
   if (!sessionResponse.ok) {
     const error = await sessionResponse.json().catch(() => null);
@@ -100,6 +103,7 @@ export async function uploadFileInChunks(args: {
   }
 
   const session = (await sessionResponse.json()) as UploadSessionResponse;
+  auth = await authHeaders(args.getToken);
   const totalChunks = Math.ceil(args.file.size / session.chunkSize);
   let completedChunks = 0;
   const uploadController = new AbortController();

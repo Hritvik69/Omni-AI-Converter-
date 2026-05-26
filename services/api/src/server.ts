@@ -33,7 +33,8 @@ app.use(
       }
       callback(new Error(`Origin not allowed: ${origin}`));
     },
-    credentials: true
+    credentials: true,
+    exposedHeaders: ["X-Demo-Session"]
   })
 );
 app.use(morgan("combined"));

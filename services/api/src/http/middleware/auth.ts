@@ -52,6 +52,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       const existingSession = readDemoSession(req);
       const signedSession = signedDemoSession(existingSession ?? undefined);
       const sessionId = existingSession ?? signedSession.slice(0, signedSession.lastIndexOf("."));
+      res.setHeader("X-Demo-Session", signedSession);
       if (isProduction || !existingSession) setDemoSessionCookie(res, signedSession);
       const user = await upsertDemoUser(sessionId);
       req.authUser = { id: user.id, clerkId: user.clerkId, email: user.email };

@@ -19,7 +19,16 @@ import {
   Video
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, warmAuthSession, websocketUrl } from "../lib/api";
+import {
+  API_NOT_CONFIGURED_MESSAGE,
+  apiFetch,
+  authHeaders,
+  getDemoSession,
+  getOptionalAuthToken,
+  isApiConfigured,
+  warmAuthSession,
+  websocketUrl
+} from "../lib/api";
 import { allTargets, defaultTargets, extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
@@ -156,9 +165,9 @@ export function ConverterDashboard() {
     async function connect() {
       if (!isApiConfigured) return;
       await warmAuthSession(getToken);
-      const token = await getToken().catch(() => null);
+      const token = await getOptionalAuthToken(getToken);
       if (cancelled) return;
-      socket = new WebSocket(websocketUrl(token));
+      socket = new WebSocket(websocketUrl(token, getDemoSession()));
       socket.onopen = () => {
         attempt = 0;
       };
@@ -355,13 +364,13 @@ export function ConverterDashboard() {
     const jobIds = rows.filter((row) => row.status === "completed" && row.jobId).map((row) => row.jobId!);
     if (!jobIds.length) return;
     if (!isApiConfigured) throw new Error(API_NOT_CONFIGURED_MESSAGE);
-    const token = await getToken();
+    const auth = await authHeaders(getToken);
     const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/conversions/zip`, {
       method: "POST",
       credentials: "include",
       headers: {
         "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {})
+        ...auth
       },
       body: JSON.stringify({ jobIds })
     });

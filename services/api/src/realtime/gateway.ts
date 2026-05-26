@@ -14,11 +14,12 @@ type ClientRecord = {
   socket: WebSocket;
 };
 
-async function resolveUserIdFromToken(token?: string, cookieHeader?: string): Promise<string | null> {
+async function resolveUserIdFromToken(token?: string, cookieHeader?: string, demoSession?: string): Promise<string | null> {
   if (!token && (!isProduction || env.ALLOW_DEMO_AUTH)) {
     const cookies = parseCookieHeader(cookieHeader);
     const generatedSession = signedDemoSession();
     const sessionId =
+      verifySignedDemoSession(demoSession) ??
       verifySignedDemoSession(cookies[demoSessionCookieName]) ??
       generatedSession.slice(0, generatedSession.lastIndexOf("."));
     const user = await upsertDemoUser(sessionId);
@@ -44,7 +45,8 @@ export function attachRealtimeGateway(server: Server): void {
     try {
       const url = new URL(request.url ?? "/ws", "http://localhost");
       const token = url.searchParams.get("token") ?? undefined;
-      const userId = await resolveUserIdFromToken(token, request.headers.cookie);
+      const demoSession = url.searchParams.get("demoSession") ?? undefined;
+      const userId = await resolveUserIdFromToken(token, request.headers.cookie, demoSession);
 
       if (!userId) {
         socket.close(1008, "Unauthorized");
