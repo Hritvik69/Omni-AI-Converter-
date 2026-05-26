@@ -1,8 +1,9 @@
 import path from "node:path";
 import sharp from "sharp";
-import type { ConversionOptions } from "@omniconvert/shared";
+import { resourceLimits, type ConversionOptions } from "@omniconvert/shared";
 import { env } from "../config/env.js";
 import { runCommand } from "../lib/exec.js";
+import { assertImageWithinLimits } from "../lib/resource-limits.js";
 
 function needsImageMagick(inputFormat: string, targetFormat: string): boolean {
   return ["ico", "bmp", "heic"].includes(targetFormat) || ["ico", "bmp", "heic"].includes(inputFormat);
@@ -20,7 +21,7 @@ async function normalizedImageMagickInput(args: {
 }): Promise<string> {
   if (!shouldNormalizeForImageMagick(args.inputFormat, args.targetFormat)) return args.inputPath;
   const normalizedPath = path.join(args.workDir, "imagemagick-input.png");
-  await sharp(args.inputPath, { limitInputPixels: false, animated: false }).png().toFile(normalizedPath);
+  await sharp(args.inputPath, { limitInputPixels: resourceLimits.maxImageInputPixels, animated: false }).png().toFile(normalizedPath);
   return normalizedPath;
 }
 
@@ -34,6 +35,7 @@ export async function convertImage(args: {
   onProgress?: (progress: number, stage: string) => Promise<void>;
 }): Promise<void> {
   const target = args.targetFormat === "jpg" ? "jpeg" : args.targetFormat;
+  await assertImageWithinLimits(args.inputPath);
   await args.onProgress?.(15, "image: metadata loaded");
 
   if (target === "svg" && args.inputFormat !== "svg") {
@@ -55,7 +57,7 @@ export async function convertImage(args: {
   }
 
   let pipeline = sharp(args.inputPath, {
-    limitInputPixels: false,
+    limitInputPixels: resourceLimits.maxImageInputPixels,
     animated: args.inputFormat === "gif"
   });
 

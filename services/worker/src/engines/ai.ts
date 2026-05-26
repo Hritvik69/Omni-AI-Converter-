@@ -1,18 +1,20 @@
 import { createReadStream } from "node:fs";
-import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import mammoth from "mammoth";
 import OpenAI from "openai";
 import pdfParse from "pdf-parse";
 import sharp from "sharp";
-import type { AiToolId, ConversionOptions } from "@omniconvert/shared";
+import { resourceLimits, type AiToolId, type ConversionOptions } from "@omniconvert/shared";
 import { env } from "../config/env.js";
 import { runCommand } from "../lib/exec.js";
 import { logger } from "../lib/logger.js";
+import { readUtf8FileLimited } from "../lib/resource-limits.js";
 import { repairPdf } from "./document.js";
 
 const MAX_TEXT_CHARS = 120000;
+const MAX_TEXT_SOURCE_BYTES = 100 * 1024 * 1024;
 const GEMINI_TEXT_FALLBACKS = ["gemini-2.0-flash"];
 
 function cleanText(text: string): string {
@@ -158,27 +160,42 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function limitExtractedText(text: string): string {
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.byteLength <= resourceLimits.maxExtractedTextBytes) return text;
+  return buffer.subarray(0, resourceLimits.maxExtractedTextBytes).toString("utf8");
+}
+
+async function assertMaxFileBytes(inputPath: string, maxBytes: number, label: string): Promise<void> {
+  const fileStat = await stat(inputPath);
+  if (fileStat.size > maxBytes) {
+    throw new Error(`${label} exceeds ${(maxBytes / 1024 / 1024).toFixed(0)} MB limit`);
+  }
+}
+
 async function extractText(inputPath: string, inputFormat: string, workDir: string): Promise<string> {
   if (["txt", "md", "markdown", "html", "htm", "rtf"].includes(inputFormat)) {
-    return readFile(inputPath, "utf8");
+    return readUtf8FileLimited(inputPath);
   }
 
   if (inputFormat === "pdf") {
+    await assertMaxFileBytes(inputPath, MAX_TEXT_SOURCE_BYTES, "PDF text extraction input");
     const buffer = await readFile(inputPath);
     const parsed = await pdfParse(buffer);
-    return parsed.text;
+    return limitExtractedText(parsed.text);
   }
 
   if (inputFormat === "docx") {
+    await assertMaxFileBytes(inputPath, MAX_TEXT_SOURCE_BYTES, "DOCX text extraction input");
     const result = await mammoth.extractRawText({ path: inputPath });
-    return result.value;
+    return limitExtractedText(result.value);
   }
 
   const plainTextPath = path.join(workDir, "extracted.txt");
   await runCommand(env.PANDOC_BIN, [inputPath, "-t", "plain", "-o", plainTextPath], {
     timeoutMs: 1000 * 60 * 8
   });
-  return readFile(plainTextPath, "utf8");
+  return readUtf8FileLimited(plainTextPath);
 }
 
 async function extractTextWithOcrFallback(inputPath: string, inputFormat: string, workDir: string): Promise<string> {
@@ -231,6 +248,7 @@ async function generateText(prompt: string): Promise<string | null> {
 
 async function generateGeminiFromFile(prompt: string, filePath: string, mimeType: string): Promise<string | null> {
   if (!env.GEMINI_API_KEY) return null;
+  await assertMaxFileBytes(filePath, resourceLimits.maxAiInlineUploadBytes, "Gemini inline upload");
   const gemini = new GoogleGenerativeAI(env.GEMINI_API_KEY);
   const file = await readFile(filePath);
   const modelNames = uniqueValues([env.GEMINI_TEXT_MODEL, ...GEMINI_TEXT_FALLBACKS]);
@@ -324,10 +342,10 @@ async function upscaleImage(inputPath: string, outputPath: string): Promise<void
     return;
   }
 
-  const metadata = await sharp(inputPath).metadata();
+  const metadata = await sharp(inputPath, { limitInputPixels: resourceLimits.maxImageInputPixels }).metadata();
   const width = metadata.width ? metadata.width * 2 : undefined;
   const height = metadata.height ? metadata.height * 2 : undefined;
-  await sharp(inputPath)
+  await sharp(inputPath, { limitInputPixels: resourceLimits.maxImageInputPixels })
     .resize({ width, height, fit: "fill", kernel: "lanczos3" })
     .sharpen()
     .toFile(outputPath);
@@ -364,6 +382,7 @@ export async function runAiTool(args: {
   options: ConversionOptions;
   onProgress?: (progress: number, stage: string) => Promise<void>;
 }): Promise<void> {
+  await assertMaxFileBytes(args.inputPath, resourceLimits.maxAiSourceBytes, "AI input");
   await args.onProgress?.(12, `ai: ${args.tool} starting`);
 
   switch (args.tool) {

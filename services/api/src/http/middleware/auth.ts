@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from "express";
 import { verifyToken } from "@clerk/backend";
 import { env, isProduction } from "../../config/env.js";
 import { prisma } from "../../lib/prisma.js";
+import { readDemoSession, setDemoSessionCookie, signedDemoSession, upsertDemoUser } from "../../lib/demo-auth.js";
 import { HttpError } from "./errors.js";
 
 declare global {
@@ -23,7 +24,7 @@ function extractBearerToken(req: Request): string | undefined {
   return header.slice("Bearer ".length);
 }
 
-export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const apiKey = req.header("x-api-key");
     if (apiKey) {
@@ -48,15 +49,11 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     const token = extractBearerToken(req);
 
     if (!token && (!isProduction || env.ALLOW_DEMO_AUTH)) {
-      const user = await prisma.user.upsert({
-        where: { clerkId: isProduction ? "demo-user" : "dev-user" },
-        create: {
-          clerkId: isProduction ? "demo-user" : "dev-user",
-          email: isProduction ? "demo@omniconvert.live" : "dev@omniconvert.local",
-          name: isProduction ? "Live Demo" : "Local Developer"
-        },
-        update: {}
-      });
+      const existingSession = readDemoSession(req);
+      const signedSession = signedDemoSession(existingSession ?? undefined);
+      const sessionId = existingSession ?? signedSession.slice(0, signedSession.lastIndexOf("."));
+      if (isProduction || !existingSession) setDemoSessionCookie(res, signedSession);
+      const user = await upsertDemoUser(sessionId);
       req.authUser = { id: user.id, clerkId: user.clerkId, email: user.email };
       return next();
     }

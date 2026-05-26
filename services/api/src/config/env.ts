@@ -22,6 +22,7 @@ const envSchema = z.object({
   WEB_ORIGIN: z.string().default("http://localhost:3000"),
   PUBLIC_API_URL: z.string().optional(),
   ALLOW_DEMO_AUTH: booleanFromEnv.default(false),
+  DEMO_SESSION_SECRET: z.string().optional(),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   STORAGE_DRIVER: z.enum(["s3", "local"]).default("s3"),
@@ -37,6 +38,7 @@ const envSchema = z.object({
   SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(5 * 1024 * 1024 * 1024),
   UPLOAD_CHUNK_BYTES: z.coerce.number().int().positive().default(8 * 1024 * 1024),
+  UPLOAD_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24),
   UPLOAD_TMP_DIR: z.string().default("./uploads"),
   CLAMAV_REQUIRED: booleanFromEnv.default(false),
   CLAMSCAN_BIN: z.string().default("clamscan")

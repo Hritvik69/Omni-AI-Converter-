@@ -1,7 +1,8 @@
 import { createReadStream } from "node:fs";
 import path from "node:path";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client
@@ -96,16 +97,30 @@ export async function putLocalFileToS3(args: {
   };
 }
 
-export async function getDownloadUrl(key: string, fileName?: string): Promise<string> {
+export async function getDownloadUrl(args: { bucket?: string | null; key: string; fileName?: string }): Promise<string> {
   return getSignedUrl(
     s3DownloadClient,
     new GetObjectCommand({
-      Bucket: env.S3_BUCKET,
-      Key: key,
-      ResponseContentDisposition: fileName
-        ? `attachment; filename="${fileName.replaceAll('"', "")}"`
+      Bucket: args.bucket ?? env.S3_BUCKET,
+      Key: args.key,
+      ResponseContentDisposition: args.fileName
+        ? `attachment; filename="${args.fileName.replaceAll('"', "")}"`
         : undefined
     }),
     { expiresIn: env.SIGNED_URL_TTL_SECONDS }
+  );
+}
+
+export async function deleteStoredObject(args: { storage: "S3" | "LOCAL"; bucket?: string | null; key: string }): Promise<void> {
+  if (args.storage === "LOCAL" || isLocalStorage()) {
+    await rm(localStoragePath(args.key), { force: true });
+    return;
+  }
+
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: args.bucket ?? env.S3_BUCKET,
+      Key: args.key
+    })
   );
 }

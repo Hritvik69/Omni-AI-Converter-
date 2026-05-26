@@ -5,6 +5,8 @@ import { conversionOptionsSchema, type AiToolId, type ConversionOptions } from "
 import { prisma } from "../lib/prisma.js";
 import { downloadS3ObjectToFile, putLocalFileToS3, storageKind } from "../lib/storage.js";
 import { withTempDir } from "../lib/temp.js";
+import { logger } from "../lib/logger.js";
+import { assertInputWithinResourceLimits } from "../lib/resource-limits.js";
 import { updateJobProgress } from "./progress.js";
 import { deliverJobWebhooks } from "./webhooks.js";
 import { convertImage } from "../engines/image.js";
@@ -30,6 +32,43 @@ function outputMime(extension: string): string {
 function outputName(originalName: string, targetFormat: string): string {
   const base = path.basename(originalName, path.extname(originalName)).replace(/[^\w.\- ()]/g, "_");
   return `${base}.${targetFormat}`;
+}
+
+async function claimQueuedJob(conversionJobId: string) {
+  const staleRunningBefore = new Date(Date.now() - 1000 * 60 * 30);
+  const claimed = await prisma.conversionJob.updateMany({
+    where: {
+      id: conversionJobId,
+      OR: [
+        { status: "QUEUED" },
+        {
+          status: "RUNNING",
+          startedAt: { lt: staleRunningBefore }
+        }
+      ]
+    },
+    data: {
+      status: "RUNNING",
+      progress: 3,
+      stage: "worker: reserving isolated workspace",
+      error: null,
+      attempts: { increment: 1 },
+      startedAt: new Date()
+    }
+  });
+
+  const job = await prisma.conversionJob.findUnique({
+    where: { id: conversionJobId },
+    include: { inputAsset: true }
+  });
+  if (!job) throw new Error(`Conversion job not found: ${conversionJobId}`);
+
+  if (!claimed.count) {
+    logger.info({ conversionJobId, status: job.status }, "Skipping duplicate or terminal conversion job execution");
+    return null;
+  }
+
+  return job;
 }
 
 async function dispatchConversion(args: {
@@ -112,19 +151,8 @@ export async function processConversionJob(
   conversionJobId: string,
   options: { willRetryOnFailure?: boolean } = {}
 ): Promise<void> {
-  const job = await prisma.conversionJob.findUnique({
-    where: { id: conversionJobId },
-    include: { inputAsset: true }
-  });
-  if (!job) throw new Error(`Conversion job not found: ${conversionJobId}`);
-
-  await updateJobProgress({
-    userId: job.userId,
-    jobId: job.id,
-    status: "running",
-    progress: 3,
-    stage: "worker: reserving isolated workspace"
-  });
+  const job = await claimQueuedJob(conversionJobId);
+  if (!job) return;
 
   try {
     await withTempDir(job.id, async (workDir) => {
@@ -140,6 +168,7 @@ export async function processConversionJob(
         key: job.inputAsset.storageKey,
         localPath: inputPath
       });
+      await assertInputWithinResourceLimits(inputPath, source);
 
       await updateJobProgress({
         userId: job.userId,
@@ -203,10 +232,37 @@ export async function processConversionJob(
         }
       });
 
-      const asset = await prisma.fileAsset.create({
-        data: {
+      const latestJob = await prisma.conversionJob.findUnique({
+        where: { id: job.id },
+        select: { outputAssetId: true, status: true }
+      });
+      if (latestJob?.status === "COMPLETED" && latestJob.outputAssetId) {
+        logger.info({ conversionJobId: job.id, outputAssetId: latestJob.outputAssetId }, "Skipping duplicate completion");
+        return;
+      }
+
+      const assetId = latestJob?.outputAssetId ?? job.id;
+      const asset = await prisma.fileAsset.upsert({
+        where: { id: assetId },
+        create: {
+          id: assetId,
           userId: job.userId,
           kind: "OUTPUT",
+          storage: storageKind(),
+          bucket: stored.bucket,
+          storageKey: stored.key,
+          originalName: outputFileName,
+          mimeType: outputMime(target),
+          extension: target,
+          sizeBytes: BigInt(stored.sizeBytes),
+          etag: stored.etag,
+          metadata: {
+            sourceAssetId: job.inputAssetId,
+            conversionJobId: job.id
+          },
+          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7)
+        },
+        update: {
           storage: storageKind(),
           bucket: stored.bucket,
           storageKey: stored.key,

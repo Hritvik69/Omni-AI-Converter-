@@ -19,7 +19,7 @@ import {
   Video
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, websocketUrl } from "../lib/api";
+import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, warmAuthSession, websocketUrl } from "../lib/api";
 import { allTargets, defaultTargets, extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
@@ -41,6 +41,21 @@ type UploadRow = {
 
 type ConversionResponse = {
   jobs: Array<{ id: string; status: string; progress: number; targetFormat: string }>;
+};
+
+type JobStateResponse = {
+  job: {
+    id: string;
+    status: string;
+    progress: number;
+    stage: string;
+    error?: string | null;
+    output?: {
+      id: string;
+      name: string;
+      downloadUrl?: string;
+    } | null;
+  };
 };
 
 const ALL_TARGETS_VALUE = "all";
@@ -77,6 +92,14 @@ function fileSize(bytes: number) {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+function normalizeJobStatus(status: string): UploadRow["status"] {
+  const normalized = status.toLowerCase();
+  if (normalized === "completed") return "completed";
+  if (normalized === "failed" || normalized === "canceled") return "failed";
+  if (normalized === "running") return "running";
+  return "queued";
+}
+
 export function ConverterDashboard() {
   const { getToken } = useAuth();
   const [rows, setRows] = useState<UploadRow[]>([]);
@@ -85,6 +108,15 @@ export function ConverterDashboard() {
   const [stripMetadata, setStripMetadata] = useState(true);
   const [lossless, setLossless] = useState(false);
   const fileStore = useRef(new Map<string, File>());
+  const activeJobKey = useMemo(
+    () =>
+      rows
+        .filter((row) => row.jobId && ["queued", "running"].includes(row.status))
+        .map((row) => row.jobId)
+        .sort()
+        .join(","),
+    [rows]
+  );
 
   const addFiles = useCallback((files: File[]) => {
     const nextRows = files.map((file) => {
@@ -109,14 +141,29 @@ export function ConverterDashboard() {
   useEffect(() => {
     let socket: WebSocket | null = null;
     let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    function scheduleReconnect() {
+      if (cancelled) return;
+      const delay = Math.min(30000, 1000 * 2 ** attempt);
+      attempt += 1;
+      reconnectTimer = setTimeout(() => {
+        void connect();
+      }, delay);
+    }
 
     async function connect() {
       if (!isApiConfigured) return;
+      await warmAuthSession(getToken);
       const token = await getToken().catch(() => null);
       if (cancelled) return;
       socket = new WebSocket(websocketUrl(token));
+      socket.onopen = () => {
+        attempt = 0;
+      };
       socket.onmessage = (message) => {
-        const payload = JSON.parse(message.data) as {
+        let payload: {
           type: string;
           event?: {
             jobId: string;
@@ -127,6 +174,11 @@ export function ConverterDashboard() {
             error?: string;
           };
         };
+        try {
+          payload = JSON.parse(String(message.data)) as typeof payload;
+        } catch {
+          return;
+        }
         if (payload.type !== "job.progress" || !payload.event) return;
         const event = payload.event;
         setRows((current) =>
@@ -144,14 +196,54 @@ export function ConverterDashboard() {
           )
         );
       };
+      socket.onclose = scheduleReconnect;
+      socket.onerror = () => socket?.close();
     }
 
     connect();
     return () => {
       cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };
   }, [getToken]);
+
+  useEffect(() => {
+    if (!isApiConfigured || !activeJobKey) return;
+    let cancelled = false;
+    const jobIds = activeJobKey.split(",").filter(Boolean);
+    const poll = async () => {
+      const results = await Promise.allSettled(
+        jobIds.map((jobId) => apiFetch<JobStateResponse>(`/api/conversions/${jobId}`, {}, getToken))
+      );
+      if (cancelled) return;
+      setRows((current) =>
+        current.map((row) => {
+          if (!row.jobId) return row;
+          const result = results.find((item) => item.status === "fulfilled" && item.value.job.id === row.jobId);
+          if (!result || result.status !== "fulfilled") return row;
+          const job = result.value.job;
+          const status = normalizeJobStatus(job.status);
+          return {
+            ...row,
+            status,
+            progress: status === "running" ? Math.max(row.progress, job.progress) : job.progress,
+            stage: job.stage,
+            outputAssetId: job.output?.id ?? row.outputAssetId,
+            downloadUrl: job.output?.downloadUrl ?? row.downloadUrl,
+            error: job.error ?? row.error
+          };
+        })
+      );
+    };
+    const timer = setInterval(() => {
+      void poll();
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeJobKey, getToken]);
 
   useEffect(() => {
     const completed = rows.filter((row) => row.status === "completed" && row.outputAssetId && !row.downloadUrl);
@@ -266,6 +358,7 @@ export function ConverterDashboard() {
     const token = await getToken();
     const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/conversions/zip`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {})

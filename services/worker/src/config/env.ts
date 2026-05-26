@@ -40,6 +40,7 @@ const envSchema = z.object({
   TESSERACT_BIN: z.string().default("tesseract"),
   PDFTOPPM_BIN: z.string().default("pdftoppm"),
   PDFTOTEXT_BIN: z.string().default("pdftotext"),
+  PDFINFO_BIN: z.string().default("pdfinfo"),
   REALESRGAN_BIN: z.string().optional(),
   REMBG_BIN: z.string().default("rembg"),
   OPENAI_API_KEY: z.string().optional(),

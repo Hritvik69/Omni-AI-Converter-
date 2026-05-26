@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { Bot, Download, FileScan, ImageOff, Loader2, Lock, Mic2, Sparkles, Unlock, UploadCloud, Wand2 } from "lucide-react";
-import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, websocketUrl } from "../lib/api";
+import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, warmAuthSession, websocketUrl } from "../lib/api";
 import { extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
@@ -24,6 +24,21 @@ type EncryptionMode = "encrypt" | "decrypt";
 
 type AiJobResponse = {
   job: { id: string };
+};
+
+type JobStateResponse = {
+  job: {
+    id: string;
+    status: string;
+    progress: number;
+    stage: string;
+    error?: string | null;
+    output?: {
+      id: string;
+      name: string;
+      downloadUrl?: string;
+    } | null;
+  };
 };
 
 const encryptedFileBegin = "-----BEGIN OMNICONVERT ENCRYPTED FILE-----";
@@ -72,6 +87,14 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function safeDownloadName(name: string): string {
   return (name || "decrypted-file").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 180) || "decrypted-file";
+}
+
+function normalizeJobStatus(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized === "completed") return "completed";
+  if (normalized === "failed" || normalized === "canceled") return "failed";
+  if (normalized === "running") return "running";
+  return "queued";
 }
 
 function encryptedOutputName(name: string): string {
@@ -205,13 +228,29 @@ export function AiToolsPanel() {
   useEffect(() => {
     let socket: WebSocket | null = null;
     let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    function scheduleReconnect() {
+      if (cancelled) return;
+      const delay = Math.min(30000, 1000 * 2 ** attempt);
+      attempt += 1;
+      reconnectTimer = setTimeout(() => {
+        void connect();
+      }, delay);
+    }
+
     async function connect() {
       if (!isApiConfigured) return;
+      await warmAuthSession(getToken);
       const token = await getToken().catch(() => null);
       if (cancelled) return;
       socket = new WebSocket(websocketUrl(token));
+      socket.onopen = () => {
+        attempt = 0;
+      };
       socket.onmessage = (message) => {
-        const payload = JSON.parse(message.data) as {
+        let payload: {
           type: string;
           event?: {
             jobId: string;
@@ -222,6 +261,11 @@ export function AiToolsPanel() {
             error?: string;
           };
         };
+        try {
+          payload = JSON.parse(String(message.data)) as typeof payload;
+        } catch {
+          return;
+        }
         if (payload.type !== "job.progress" || payload.event?.jobId !== jobId) return;
         setStatus(payload.event.status);
         setProgress(payload.event.progress);
@@ -229,13 +273,39 @@ export function AiToolsPanel() {
         setError(payload.event.error ?? null);
         if (payload.event.outputAssetId) setOutputAssetId(payload.event.outputAssetId);
       };
+      socket.onclose = scheduleReconnect;
+      socket.onerror = () => socket?.close();
     }
     connect();
     return () => {
       cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };
   }, [getToken, jobId]);
+
+  useEffect(() => {
+    if (!jobId || !["queued", "running"].includes(status) || !isApiConfigured) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      apiFetch<JobStateResponse>(`/api/conversions/${jobId}`, {}, getToken)
+        .then((result) => {
+          if (cancelled) return;
+          const nextStatus = normalizeJobStatus(result.job.status);
+          setStatus(nextStatus);
+          setProgress(result.job.progress);
+          setStage(result.job.stage);
+          setError(result.job.error ?? null);
+          if (result.job.output?.id) setOutputAssetId(result.job.output.id);
+          if (result.job.output?.downloadUrl) setDownloadUrl(result.job.output.downloadUrl);
+        })
+        .catch(() => undefined);
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [getToken, jobId, status]);
 
   useEffect(() => {
     if (status !== "completed" || !outputAssetId || downloadUrl) return;

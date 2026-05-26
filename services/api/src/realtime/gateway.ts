@@ -6,6 +6,7 @@ import { env, isProduction } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { redisSub } from "../lib/redis.js";
 import { logger } from "../lib/logger.js";
+import { demoSessionCookieName, parseCookieHeader, signedDemoSession, upsertDemoUser, verifySignedDemoSession } from "../lib/demo-auth.js";
 import { REALTIME_CHANNEL } from "./events.js";
 
 type ClientRecord = {
@@ -13,17 +14,14 @@ type ClientRecord = {
   socket: WebSocket;
 };
 
-async function resolveUserIdFromToken(token?: string): Promise<string | null> {
+async function resolveUserIdFromToken(token?: string, cookieHeader?: string): Promise<string | null> {
   if (!token && (!isProduction || env.ALLOW_DEMO_AUTH)) {
-    const user = await prisma.user.upsert({
-      where: { clerkId: isProduction ? "demo-user" : "dev-user" },
-      create: {
-        clerkId: isProduction ? "demo-user" : "dev-user",
-        email: isProduction ? "demo@omniconvert.live" : "dev@omniconvert.local",
-        name: isProduction ? "Live Demo" : "Local Developer"
-      },
-      update: {}
-    });
+    const cookies = parseCookieHeader(cookieHeader);
+    const generatedSession = signedDemoSession();
+    const sessionId =
+      verifySignedDemoSession(cookies[demoSessionCookieName]) ??
+      generatedSession.slice(0, generatedSession.lastIndexOf("."));
+    const user = await upsertDemoUser(sessionId);
     return user.id;
   }
 
@@ -46,7 +44,7 @@ export function attachRealtimeGateway(server: Server): void {
     try {
       const url = new URL(request.url ?? "/ws", "http://localhost");
       const token = url.searchParams.get("token") ?? undefined;
-      const userId = await resolveUserIdFromToken(token);
+      const userId = await resolveUserIdFromToken(token, request.headers.cookie);
 
       if (!userId) {
         socket.close(1008, "Unauthorized");

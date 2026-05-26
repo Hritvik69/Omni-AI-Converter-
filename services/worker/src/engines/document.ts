@@ -1,9 +1,11 @@
 import path from "node:path";
-import { readFile, rename, stat, writeFile } from "node:fs/promises";
+import { rename, stat, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import type { ConversionOptions } from "@omniconvert/shared";
 import { env } from "../config/env.js";
 import { runCommand } from "../lib/exec.js";
+import { assertSafeHtmlForImageRender } from "../lib/html-safety.js";
+import { readUtf8FileLimited } from "../lib/resource-limits.js";
 
 function isPandocNative(inputFormat: string, targetFormat: string): boolean {
   return (
@@ -34,7 +36,7 @@ function escapeHtml(value: string): string {
 async function convertPdfTextOutput(inputPath: string, outputPath: string, targetFormat: string, workDir: string): Promise<void> {
   const textPath = path.join(workDir, "pdf-text.txt");
   await runCommand(env.PDFTOTEXT_BIN, ["-layout", inputPath, textPath], { timeoutMs: 1000 * 60 * 10 });
-  const text = (await readFile(textPath, "utf8")).trim() || "No selectable text was found in this PDF.";
+  const text = (await readUtf8FileLimited(textPath)).trim() || "No selectable text was found in this PDF.";
 
   if (targetFormat === "txt") {
     await writeFile(outputPath, text, "utf8");
@@ -73,8 +75,15 @@ export async function convertHtmlToImage(args: {
     throw new Error(`Unsupported HTML image target: ${args.targetFormat}`);
   }
 
+  await assertSafeHtmlForImageRender(args.inputPath);
+
   const commandArgs = [
-    "--enable-local-file-access",
+    "--disable-local-file-access",
+    "--disable-javascript",
+    "--load-error-handling",
+    "abort",
+    "--load-media-error-handling",
+    "abort",
     "--format",
     target,
     "--quality",

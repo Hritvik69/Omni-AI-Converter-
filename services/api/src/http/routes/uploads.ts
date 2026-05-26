@@ -32,7 +32,7 @@ uploadsRouter.post("/sessions", requireAuth, uploadRateLimit, async (req, res, n
     res.status(201).json({
       uploadId: session.uploadId,
       chunkSize: session.chunkSize,
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString()
+      expiresAt: session.expiresAt
     });
   } catch (error) {
     next(error);
@@ -41,6 +41,7 @@ uploadsRouter.post("/sessions", requireAuth, uploadRateLimit, async (req, res, n
 
 uploadsRouter.put("/:uploadId/chunks/:index", requireAuth, uploadRateLimit, async (req, res, next) => {
   try {
+    req.setTimeout(1000 * 60 * 5);
     const uploadId = requiredParam(req.params.uploadId, "uploadId");
     const index = Number(requiredParam(req.params.index, "index"));
     const session = await getUploadSession(uploadId, req.authUser.id);

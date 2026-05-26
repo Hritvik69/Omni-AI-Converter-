@@ -4,9 +4,10 @@ import { pathToFileURL } from "node:url";
 import { unzipSync } from "fflate";
 import pptxgen from "pptxgenjs";
 import sharp from "sharp";
-import type { ConversionOptions } from "@omniconvert/shared";
+import { resourceLimits, type ConversionOptions } from "@omniconvert/shared";
 import { env } from "../config/env.js";
 import { runCommand } from "../lib/exec.js";
+import { assertPdfWithinLimits, assertZipArchiveWithinLimits, readUtf8FileLimited } from "../lib/resource-limits.js";
 
 type PptxDeck = {
   layout: string;
@@ -34,6 +35,7 @@ function libreOfficeArgs(workDir: string, args: string[]): string[] {
 }
 
 async function renderPdfToImages(inputPath: string, outDir: string, targetFormat: "png" | "jpg") {
+  await assertPdfWithinLimits(inputPath);
   await mkdir(outDir, { recursive: true });
   await runCommand(
     env.PDFTOPPM_BIN,
@@ -68,8 +70,9 @@ async function ensurePdf(args: {
 }
 
 async function extractPdfText(pdfPath: string, outputPath: string): Promise<string> {
+  await assertPdfWithinLimits(pdfPath);
   await runCommand(env.PDFTOTEXT_BIN, ["-layout", pdfPath, outputPath], { timeoutMs: 1000 * 60 * 10 });
-  return readFile(outputPath, "utf8");
+  return readUtf8FileLimited(outputPath);
 }
 
 function escapeHtml(value: string): string {
@@ -103,6 +106,7 @@ function slideNumber(fileName: string): number {
 }
 
 async function extractPptxText(inputPath: string): Promise<string> {
+  await assertZipArchiveWithinLimits(inputPath);
   const archive = unzipSync(new Uint8Array(await readFile(inputPath)));
   const decoder = new TextDecoder("utf-8");
   const slideFiles = Object.keys(archive)
@@ -212,6 +216,9 @@ async function stitchImages(images: string[], outputPath: string, targetFormat: 
     top += item.height;
     return layer;
   });
+  if (width * top > resourceLimits.maxOutputPixels || width > resourceLimits.maxOutputDimension || top > resourceLimits.maxOutputDimension) {
+    throw new Error("Rendered slide image exceeds output dimension or pixel limits");
+  }
 
   let output = sharp({
     create: {

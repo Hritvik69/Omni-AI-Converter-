@@ -8,6 +8,7 @@ import { GetObjectCommand } from "@aws-sdk/client-s3";
 import type { ConversionJob, FileAsset, Prisma } from "@prisma/client";
 import { v4 as uuidv4 } from "uuid";
 import {
+  conversionOptionsSchema,
   createAiJobSchema,
   createConversionSchema,
   uniqueConversionTargetsFor,
@@ -66,7 +67,7 @@ async function assetDownloadUrl(
   asset: FileAsset
 ): Promise<string> {
   if (asset.storage === "LOCAL") return localAssetDownloadUrl(req, asset.id);
-  return getDownloadUrl(asset.storageKey, asset.originalName);
+  return getDownloadUrl({ bucket: asset.bucket, key: asset.storageKey, fileName: asset.originalName });
 }
 
 async function emitQueued(userId: string, jobId: string): Promise<void> {
@@ -79,9 +80,43 @@ async function emitQueued(userId: string, jobId: string): Promise<void> {
   await publishJobEvent(userId, event);
 }
 
+async function failCreatedJobsAfterEnqueueError(jobs: Array<{ id: string; userId: string }>, error: unknown): Promise<void> {
+  if (!jobs.length) return;
+  const message = error instanceof Error ? error.message : "Queue enqueue failed";
+  await prisma.conversionJob.updateMany({
+    where: { id: { in: jobs.map((job) => job.id) }, status: "QUEUED" },
+    data: {
+      status: "FAILED",
+      progress: 100,
+      stage: "failed",
+      error: `Queue enqueue failed: ${message.slice(0, 300)}`,
+      completedAt: new Date()
+    }
+  });
+  await Promise.all(
+    jobs.map((job) =>
+      publishJobEvent(job.userId, {
+        jobId: job.id,
+        status: "failed",
+        progress: 100,
+        stage: "failed",
+        error: "Queue enqueue failed"
+      })
+    )
+  );
+}
+
 conversionsRouter.post("/", requireAuth, async (req, res, next) => {
   try {
     const input = createConversionSchema.parse(req.body);
+    const preset = input.presetId
+      ? await prisma.conversionPreset.findFirst({
+          where: { id: input.presetId, userId: req.authUser.id }
+        })
+      : null;
+    if (input.presetId && !preset) throw new HttpError(404, "Preset not found");
+    const presetOptions = preset ? conversionOptionsSchema.parse(preset.options ?? {}) : {};
+
     const plannedJobs: Array<{
       asset: FileAsset;
       targetFormat: string;
@@ -93,17 +128,24 @@ conversionsRouter.post("/", requireAuth, async (req, res, next) => {
         where: { id: file.uploadId, userId: req.authUser.id, kind: "ORIGINAL" }
       });
       if (!asset) throw new HttpError(404, `Upload not found: ${file.uploadId}`);
+      const requestedTargetFormat = file.targetFormat ?? preset?.target;
+      if (!requestedTargetFormat) {
+        throw new HttpError(422, "targetFormat is required when no preset supplies a target");
+      }
       const targetFormats =
-        file.targetFormat.trim().toLowerCase() === "all"
+        requestedTargetFormat.trim().toLowerCase() === "all"
           ? uniqueConversionTargetsFor(asset.extension)
-          : [file.targetFormat];
+          : [requestedTargetFormat];
       if (!targetFormats.length) throw new HttpError(415, `No supported conversion targets for ${asset.extension}`);
 
       for (const requestedTarget of targetFormats) {
         plannedJobs.push({
           asset,
           targetFormat: assertConversionTarget(asset.extension, requestedTarget),
-          options: file.options
+          options: {
+            ...presetOptions,
+            ...file.options
+          }
         });
       }
     }
@@ -132,19 +174,28 @@ conversionsRouter.post("/", requireAuth, async (req, res, next) => {
     );
     const jobs = createdJobs.map(jobDto);
 
-    await conversionQueue.addBulk(
-      jobs.map((job) => ({
-        name: "convert",
-        data: { conversionJobId: job.id },
-        opts: { jobId: job.id }
-      }))
-    );
+    try {
+      await conversionQueue.addBulk(
+        jobs.map((job) => ({
+          name: "convert",
+          data: { conversionJobId: job.id },
+          opts: { jobId: job.id }
+        }))
+      );
+    } catch (error) {
+      await failCreatedJobsAfterEnqueueError(createdJobs, error);
+      throw new HttpError(503, "Conversion queue is temporarily unavailable");
+    }
     await Promise.all(jobs.map((job) => emitQueued(req.authUser.id, job.id)));
 
     res.status(202).json({ jobs });
   } catch (error) {
     next(error);
   }
+});
+
+conversionsRouter.get("/auth/session", requireAuth, (_req, res) => {
+  res.json({ ok: true });
 });
 
 conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
@@ -166,11 +217,14 @@ conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
       "file-repair": asset.extension
     };
 
+    const jobId = uuidv4();
     const job = await prisma.conversionJob.create({
       data: {
+        id: jobId,
         userId: req.authUser.id,
         kind: "AI",
         status: "QUEUED",
+        queueJobId: jobId,
         sourceFormat: asset.extension,
         targetFormat: targetByTool[input.tool] ?? "txt",
         tool: input.tool,
@@ -179,11 +233,12 @@ conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
       }
     });
 
-    const queued = await conversionQueue.add("ai", { conversionJobId: job.id }, { jobId: job.id });
-    await prisma.conversionJob.update({
-      where: { id: job.id },
-      data: { queueJobId: queued.id }
-    });
+    try {
+      await conversionQueue.add("ai", { conversionJobId: job.id }, { jobId: job.id });
+    } catch (error) {
+      await failCreatedJobsAfterEnqueueError([job], error);
+      throw new HttpError(503, "Conversion queue is temporarily unavailable");
+    }
     await emitQueued(req.authUser.id, job.id);
 
     res.status(202).json({ job: jobDto(job) });
@@ -262,7 +317,7 @@ conversionsRouter.get("/assets/:assetId/download-file", requireAuth, async (req,
     if (!asset) throw new HttpError(404, "Asset not found");
 
     if (asset.storage !== "LOCAL") {
-      res.redirect(await getDownloadUrl(asset.storageKey, asset.originalName));
+      res.redirect(await getDownloadUrl({ bucket: asset.bucket, key: asset.storageKey, fileName: asset.originalName }));
       return;
     }
 

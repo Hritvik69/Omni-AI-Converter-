@@ -59,9 +59,25 @@ export type AiToolId = (typeof aiToolIds)[number];
 export type SupportedFormat = (typeof allFormats)[number];
 
 const imageTargets = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "ico", "heic"] as const;
-const documentTargets = ["pdf", "docx", "doc", "txt", "rtf", "odt", "html", "md", "epub"] as const;
+const documentTargets = ["pdf", "docx", "txt", "rtf", "odt", "html", "md", "epub"] as const;
 const documentVisualTargets = ["png", "jpg", "jpeg", "pptx"] as const;
 const presentationTargets = ["pdf", "pptx", "ppt", "html", "txt", "md", "docx", "odt", "rtf", "epub", "png", "jpg", "jpeg"] as const;
+
+export const resourceLimits = {
+  maxOutputDimension: 30000,
+  maxOutputPixels: 80_000_000,
+  maxImageInputPixels: 80_000_000,
+  maxPdfPages: 200,
+  maxArchiveEntries: 1200,
+  maxArchiveUncompressedBytes: 1024 * 1024 * 1024,
+  maxExtractedTextBytes: 2 * 1024 * 1024,
+  maxAiInlineUploadBytes: 20 * 1024 * 1024,
+  maxAiSourceBytes: 512 * 1024 * 1024,
+  maxHtmlInputBytes: 10 * 1024 * 1024,
+  maxWebhookEndpointsPerUser: 10,
+  webhookTimeoutMs: 10_000,
+  webhookResponseBytes: 64 * 1024
+} as const;
 
 export function normalizeFormat(format: string): string {
   const normalized = format.trim().toLowerCase().replace(/^\./, "");
@@ -121,14 +137,14 @@ export const conversionOptionsSchema = z.object({
   lossless: z.boolean().optional(),
   quality: z.number().min(1).max(100).optional(),
   compressionLevel: z.number().min(0).max(9).optional(),
-  width: z.number().int().positive().optional(),
-  height: z.number().int().positive().optional(),
+  width: z.number().int().positive().max(resourceLimits.maxOutputDimension).optional(),
+  height: z.number().int().positive().max(resourceLimits.maxOutputDimension).optional(),
   crop: z
     .object({
       left: z.number().int().nonnegative(),
       top: z.number().int().nonnegative(),
-      width: z.number().int().positive(),
-      height: z.number().int().positive()
+      width: z.number().int().positive().max(resourceLimits.maxOutputDimension),
+      height: z.number().int().positive().max(resourceLimits.maxOutputDimension)
     })
     .optional(),
   stripMetadata: z.boolean().optional(),
@@ -137,9 +153,13 @@ export const conversionOptionsSchema = z.object({
   videoBitrate: z.string().regex(/^\d+[kKmM]?$/).optional(),
   resolution: z
     .object({
-      width: z.number().int().positive(),
-      height: z.number().int().positive()
+      width: z.number().int().positive().max(resourceLimits.maxOutputDimension),
+      height: z.number().int().positive().max(resourceLimits.maxOutputDimension)
     })
+    .refine(
+      (value) => value.width * value.height <= resourceLimits.maxOutputPixels,
+      "Output resolution exceeds the maximum pixel count"
+    )
     .optional(),
   trim: z
     .object({
@@ -153,6 +173,21 @@ export const conversionOptionsSchema = z.object({
   extractFrames: z.boolean().optional(),
   subtitleUploadId: z.string().optional(),
   webhookUrl: z.string().url().optional()
+}).superRefine((options, context) => {
+  if (options.width && options.height && options.width * options.height > resourceLimits.maxOutputPixels) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["width"],
+      message: "Output dimensions exceed the maximum pixel count"
+    });
+  }
+  if (options.crop && options.crop.width * options.crop.height > resourceLimits.maxOutputPixels) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["crop"],
+      message: "Crop dimensions exceed the maximum pixel count"
+    });
+  }
 });
 
 export type ConversionOptions = z.infer<typeof conversionOptionsSchema>;
@@ -173,7 +208,7 @@ export const createConversionSchema = z.object({
   files: z.array(
     z.object({
       uploadId: z.string().uuid(),
-      targetFormat: z.string().trim().toLowerCase(),
+      targetFormat: z.string().trim().toLowerCase().optional(),
       options: conversionOptionsSchema.default({})
     })
   ).min(1).max(100),

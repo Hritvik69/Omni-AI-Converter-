@@ -20,6 +20,7 @@ export async function apiFetch<T>(
   const token = getToken ? await getToken() : null;
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       "content-type": "application/json",
       ...(options.headers ?? {}),
@@ -33,6 +34,11 @@ export async function apiFetch<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+export async function warmAuthSession(getToken?: AuthTokenGetter): Promise<void> {
+  if (!isApiConfigured) return;
+  await apiFetch<{ ok: boolean }>("/api/conversions/auth/session", {}, getToken).catch(() => undefined);
 }
 
 export function websocketUrl(token?: string | null): string {

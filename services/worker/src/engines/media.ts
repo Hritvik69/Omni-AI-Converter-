@@ -37,6 +37,28 @@ function addTrimArgs(args: string[], options: ConversionOptions): void {
   if (options.trim.durationSeconds) args.push("-t", String(options.trim.durationSeconds));
 }
 
+function createFfmpegProgressHandler(args: {
+  duration: number | null;
+  stage: string;
+  onProgress?: (progress: number, stage: string) => Promise<void>;
+}) {
+  let lastProgress = 0;
+  let lastUpdateAt = 0;
+  let chain = Promise.resolve();
+
+  return (chunk: string) => {
+    const current = parseFfmpegTime(chunk);
+    if (!args.duration || !current) return chain;
+    const progress = 12 + Math.min(83, (current / args.duration) * 83);
+    const now = Date.now();
+    if (progress < 95 && progress - lastProgress < 1 && now - lastUpdateAt < 2000) return chain;
+    lastProgress = progress;
+    lastUpdateAt = now;
+    chain = chain.catch(() => undefined).then(() => args.onProgress?.(progress, args.stage)).then(() => undefined);
+    return chain;
+  };
+}
+
 export async function convertVideo(args: {
   inputPath: string;
   outputPath: string;
@@ -80,13 +102,11 @@ export async function convertVideo(args: {
 
   await runCommand(env.FFMPEG_BIN, ffmpegArgs, {
     timeoutMs: 1000 * 60 * 60 * 4,
-    onStderr: async (chunk) => {
-      const current = parseFfmpegTime(chunk);
-      if (duration && current) {
-        const progress = 12 + Math.min(83, (current / duration) * 83);
-        await args.onProgress?.(progress, "video: ffmpeg transcoding");
-      }
-    }
+    onStderr: createFfmpegProgressHandler({
+      duration,
+      stage: "video: ffmpeg transcoding",
+      onProgress: args.onProgress
+    })
   });
   await args.onProgress?.(100, "video: ffmpeg complete");
 }
@@ -125,13 +145,11 @@ export async function convertAudio(args: {
 
   await runCommand(env.FFMPEG_BIN, ffmpegArgs, {
     timeoutMs: 1000 * 60 * 60,
-    onStderr: async (chunk) => {
-      const current = parseFfmpegTime(chunk);
-      if (duration && current) {
-        const progress = 12 + Math.min(83, (current / duration) * 83);
-        await args.onProgress?.(progress, "audio: ffmpeg transcoding");
-      }
-    }
+    onStderr: createFfmpegProgressHandler({
+      duration,
+      stage: "audio: ffmpeg transcoding",
+      onProgress: args.onProgress
+    })
   });
   await args.onProgress?.(100, "audio: ffmpeg complete");
 }

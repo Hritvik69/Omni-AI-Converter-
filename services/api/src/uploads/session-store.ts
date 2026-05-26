@@ -14,6 +14,7 @@ export type UploadSession = {
   chunkSize: number;
   dir: string;
   createdAt: string;
+  expiresAt: string;
 };
 
 export async function createUploadSession(args: {
@@ -40,7 +41,8 @@ export async function createUploadSession(args: {
     checksumSha256: args.checksumSha256,
     chunkSize: env.UPLOAD_CHUNK_BYTES,
     dir,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + env.UPLOAD_SESSION_TTL_SECONDS * 1000).toISOString()
   };
 
   await writeFile(path.join(dir, "session.json"), JSON.stringify(session, null, 2), "utf8");
@@ -54,6 +56,13 @@ export async function getUploadSession(uploadId: string, userId: string): Promis
     const session = JSON.parse(raw) as UploadSession;
     if (session.userId !== userId || session.uploadId !== uploadId) {
       throw new HttpError(403, "Upload session does not belong to this user");
+    }
+    const expiresAt =
+      Date.parse(session.expiresAt) ||
+      (Date.parse(session.createdAt) + env.UPLOAD_SESSION_TTL_SECONDS * 1000);
+    if (expiresAt <= Date.now()) {
+      await deleteUploadSession(session);
+      throw new HttpError(410, "Upload session expired");
     }
     return session;
   } catch (error) {
