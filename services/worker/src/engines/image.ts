@@ -1,3 +1,4 @@
+import path from "node:path";
 import sharp from "sharp";
 import type { ConversionOptions } from "@omniconvert/shared";
 import { env } from "../config/env.js";
@@ -7,11 +8,28 @@ function needsImageMagick(inputFormat: string, targetFormat: string): boolean {
   return ["ico", "bmp", "heic"].includes(targetFormat) || ["ico", "bmp", "heic"].includes(inputFormat);
 }
 
+function shouldNormalizeForImageMagick(inputFormat: string, targetFormat: string): boolean {
+  return ["ico", "bmp", "heic"].includes(targetFormat) && !["ico", "bmp", "heic"].includes(inputFormat);
+}
+
+async function normalizedImageMagickInput(args: {
+  inputPath: string;
+  inputFormat: string;
+  targetFormat: string;
+  workDir: string;
+}): Promise<string> {
+  if (!shouldNormalizeForImageMagick(args.inputFormat, args.targetFormat)) return args.inputPath;
+  const normalizedPath = path.join(args.workDir, "imagemagick-input.png");
+  await sharp(args.inputPath, { limitInputPixels: false, animated: false }).png().toFile(normalizedPath);
+  return normalizedPath;
+}
+
 export async function convertImage(args: {
   inputPath: string;
   inputFormat: string;
   outputPath: string;
   targetFormat: string;
+  workDir: string;
   options: ConversionOptions;
   onProgress?: (progress: number, stage: string) => Promise<void>;
 }): Promise<void> {
@@ -23,7 +41,8 @@ export async function convertImage(args: {
   }
 
   if (needsImageMagick(args.inputFormat, args.targetFormat)) {
-    const commandArgs = [args.inputPath];
+    const inputPath = await normalizedImageMagickInput(args);
+    const commandArgs = [inputPath];
     if (args.options.stripMetadata !== false) commandArgs.push("-strip");
     if (args.options.width || args.options.height) {
       commandArgs.push("-resize", `${args.options.width ?? ""}x${args.options.height ?? ""}`);
