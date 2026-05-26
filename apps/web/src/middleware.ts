@@ -16,12 +16,18 @@ function hasConfiguredClerk(): boolean {
   return Boolean(secretKey && !secretKey.includes("replace_me"));
 }
 
+function shouldUseClerkMiddleware(): boolean {
+  if (!hasConfiguredClerk()) return false;
+  if (process.env.NODE_ENV !== "production") return process.env.CLERK_AUTH_ENABLED === "true";
+  return true;
+}
+
 const protectedMiddleware = clerkMiddleware(async (auth, req) => {
   if (!isPublicRoute(req)) await auth.protect();
 });
 
 export default function middleware(req: NextRequest, event: NextFetchEvent) {
-  if (!hasConfiguredClerk()) return NextResponse.next();
+  if (isPublicRoute(req) || !shouldUseClerkMiddleware()) return NextResponse.next();
   return protectedMiddleware(req, event);
 }
 

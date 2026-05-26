@@ -8,6 +8,7 @@ loadEnvConfig(repoRoot, process.env.NODE_ENV !== "production", console, true);
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@omniconvert/shared"],
+  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
   experimental: {
     optimizePackageImports: ["lucide-react"]
