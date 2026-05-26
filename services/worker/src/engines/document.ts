@@ -61,6 +61,36 @@ async function convertPdfTextOutput(inputPath: string, outputPath: string, targe
   await runCommand(env.PANDOC_BIN, [markdownPath, "-o", outputPath], { timeoutMs: 1000 * 60 * 10 });
 }
 
+export async function convertHtmlToImage(args: {
+  inputPath: string;
+  outputPath: string;
+  targetFormat: string;
+  options: ConversionOptions;
+  onProgress?: (progress: number, stage: string) => Promise<void>;
+}): Promise<void> {
+  const target = args.targetFormat === "jpeg" ? "jpg" : args.targetFormat;
+  if (!["png", "jpg"].includes(target)) {
+    throw new Error(`Unsupported HTML image target: ${args.targetFormat}`);
+  }
+
+  const commandArgs = [
+    "--enable-local-file-access",
+    "--format",
+    target,
+    "--quality",
+    String(args.options.quality ?? 90)
+  ];
+
+  if (args.options.width) commandArgs.push("--width", String(args.options.width));
+  if (args.options.height) commandArgs.push("--height", String(args.options.height));
+
+  await args.onProgress?.(35, "document: rendering html page to image");
+  await runCommand(env.WKHTMLTOIMAGE_BIN, [...commandArgs, args.inputPath, args.outputPath], {
+    timeoutMs: 1000 * 60 * 10
+  });
+  await args.onProgress?.(100, "document: html image export complete");
+}
+
 export async function convertDocument(args: {
   inputPath: string;
   inputFormat: string;

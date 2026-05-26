@@ -1,4 +1,4 @@
-import { conversionTargetsFor } from "@omniconvert/shared";
+import { conversionTargetsFor, uniqueConversionTargetsFor } from "@omniconvert/shared";
 
 export const formatGroups = {
   image: ["png", "jpg", "jpeg", "webp", "svg", "gif", "bmp", "tiff", "ico", "heic"],
@@ -14,4 +14,8 @@ export function extensionOf(name: string): string {
 
 export function defaultTargets(ext: string): string[] {
   return conversionTargetsFor(ext);
+}
+
+export function allTargets(ext: string): string[] {
+  return uniqueConversionTargetsFor(ext);
 }

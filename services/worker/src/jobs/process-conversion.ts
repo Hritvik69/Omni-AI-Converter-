@@ -8,7 +8,7 @@ import { withTempDir } from "../lib/temp.js";
 import { updateJobProgress } from "./progress.js";
 import { deliverJobWebhooks } from "./webhooks.js";
 import { convertImage } from "../engines/image.js";
-import { convertDocument } from "../engines/document.js";
+import { convertDocument, convertHtmlToImage } from "../engines/document.js";
 import { convertPresentation } from "../engines/presentation.js";
 import { convertAudio, convertVideo } from "../engines/media.js";
 import { runAiTool } from "../engines/ai.js";
@@ -51,6 +51,17 @@ async function dispatchConversion(args: {
 
   if (isVideo(source) && isVideo(target)) {
     await convertVideo({ ...args, targetFormat: target });
+    return;
+  }
+
+  if (["html", "htm"].includes(source) && ["png", "jpg"].includes(target)) {
+    await convertHtmlToImage({
+      inputPath: args.inputPath,
+      outputPath: args.outputPath,
+      targetFormat: target,
+      options: args.options,
+      onProgress: args.onProgress
+    });
     return;
   }
 

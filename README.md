@@ -18,7 +18,7 @@ render.yaml              One-click Render backend blueprint for demos
 ## Real Engines
 
 - Images: Sharp and ImageMagick/libvips.
-- Documents: LibreOffice headless, Pandoc, Ghostscript, PDF parsing.
+- Documents: LibreOffice headless, Pandoc, wkhtmltopdf/wkhtmltoimage, Ghostscript, PDF parsing.
 - Presentations: LibreOffice, Poppler, PptxGenJS.
 - Video and audio: FFmpeg and FFprobe.
 - AI: Tesseract OCR, OpenAI/Gemini text models, Whisper transcription, rembg, optional Real-ESRGAN.
@@ -68,7 +68,7 @@ npm run dev:local
 
 `dev:infra` starts only Postgres, Redis, and MinIO. `dev:local` opens three terminals for the API, worker, and web app.
 
-Install native binaries for conversions: FFmpeg, FFprobe, LibreOffice, Pandoc, Ghostscript, ImageMagick, Tesseract, Poppler, and `rembg` (see `requirements.txt`).
+Install native binaries for conversions: FFmpeg, FFprobe, LibreOffice, Pandoc, wkhtmltopdf/wkhtmltoimage, Ghostscript, ImageMagick, Tesseract, Poppler, and `rembg` (see `requirements.txt`).
 
 ## Security
 

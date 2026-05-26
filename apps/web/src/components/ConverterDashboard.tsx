@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { API_NOT_CONFIGURED_MESSAGE, apiFetch, isApiConfigured, websocketUrl } from "../lib/api";
-import { defaultTargets, extensionOf } from "../lib/formats";
+import { allTargets, defaultTargets, extensionOf } from "../lib/formats";
 import { uploadFileInChunks } from "../lib/upload";
 
 type UploadRow = {
@@ -40,8 +40,10 @@ type UploadRow = {
 };
 
 type ConversionResponse = {
-  jobs: Array<{ id: string; status: string; progress: number }>;
+  jobs: Array<{ id: string; status: string; progress: number; targetFormat: string }>;
 };
+
+const ALL_TARGETS_VALUE = "all";
 
 function iconFor(ext: string) {
   if (["png", "jpg", "jpeg", "webp", "svg", "gif", "bmp", "tiff", "ico", "heic"].includes(ext)) return ImageIcon;
@@ -163,6 +165,16 @@ export function ConverterDashboard() {
     for (const row of ready) {
       const file = fileStore.current.get(row.id);
       if (!file) continue;
+      const targets = defaultTargets(row.extension);
+      const targetFormats = row.targetFormat === ALL_TARGETS_VALUE ? allTargets(row.extension) : [row.targetFormat];
+      if (!targetFormats.length) {
+        setRows((current) =>
+          current.map((item) =>
+            item.id === row.id ? { ...item, status: "failed", stage: "failed", error: `No targets for .${row.extension}` } : item
+          )
+        );
+        continue;
+      }
       try {
         setRows((current) => current.map((item) => (item.id === row.id ? { ...item, status: "uploading", stage: "uploading chunks", progress: 1 } : item)));
         const upload = await uploadFileInChunks({
@@ -178,23 +190,43 @@ export function ConverterDashboard() {
           {
             method: "POST",
             body: JSON.stringify({
-              files: [
-                {
+              files: targetFormats.map((targetFormat) => ({
                   uploadId: upload.uploadId,
-                  targetFormat: row.targetFormat,
+                  targetFormat,
                   options: {
                     quality,
                     stripMetadata,
                     lossless
                   }
-                }
-              ]
+                }))
             })
           },
           getToken
         );
-        const jobId = response.jobs[0]?.id;
-        setRows((current) => current.map((item) => (item.id === row.id ? { ...item, jobId, status: "queued", progress: 42 } : item)));
+        if (targetFormats.length === 1) {
+          const jobId = response.jobs[0]?.id;
+          setRows((current) => current.map((item) => (item.id === row.id ? { ...item, uploadId: upload.uploadId, jobId, status: "queued", progress: 42 } : item)));
+          continue;
+        }
+
+        const jobsByTarget = new Map(response.jobs.map((job) => [job.targetFormat, job]));
+        const expandedRows: UploadRow[] = targetFormats.map((targetFormat) => {
+          const job = jobsByTarget.get(targetFormat) ?? response.jobs.find((item) => item.targetFormat === targetFormat);
+          return {
+            id: crypto.randomUUID(),
+            name: row.name,
+            size: row.size,
+            extension: row.extension,
+            targetFormat,
+            status: "queued",
+            progress: 42,
+            stage: "queued",
+            uploadId: upload.uploadId,
+            jobId: job?.id
+          };
+        });
+        fileStore.current.delete(row.id);
+        setRows((current) => current.flatMap((item) => (item.id === row.id ? expandedRows : [item])));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Conversion failed";
         setRows((current) => current.map((item) => (item.id === row.id ? { ...item, status: "failed", stage: "failed", error: message } : item)));
@@ -330,6 +362,7 @@ export function ConverterDashboard() {
                         }
                         className="focus-ring w-full rounded-lg border border-line bg-ink px-3 py-2 text-xs font-bold text-slate-200 disabled:opacity-50"
                       >
+                        {targets.length > 1 ? <option value={ALL_TARGETS_VALUE}>ALL</option> : null}
                         {targets.map((target) => (
                           <option key={target} value={target}>
                             {target.toUpperCase()}

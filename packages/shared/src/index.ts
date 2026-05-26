@@ -70,6 +70,12 @@ export function normalizeFormat(format: string): string {
   return normalized;
 }
 
+export function canonicalOutputFormat(format: string): string {
+  const normalized = normalizeFormat(format);
+  if (normalized === "jpeg") return "jpg";
+  return normalized;
+}
+
 export function conversionTargetsFor(sourceFormat: string): string[] {
   const source = normalizeFormat(sourceFormat);
 
@@ -94,6 +100,16 @@ export function conversionTargetsFor(sourceFormat: string): string[] {
   }
 
   return [];
+}
+
+export function uniqueConversionTargetsFor(sourceFormat: string): string[] {
+  const seen = new Set<string>();
+  return conversionTargetsFor(sourceFormat).filter((target) => {
+    const canonical = canonicalOutputFormat(target);
+    if (seen.has(canonical)) return false;
+    seen.add(canonical);
+    return true;
+  });
 }
 
 export function canConvert(sourceFormat: string, targetFormat: string): boolean {

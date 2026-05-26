@@ -9,6 +9,7 @@ import type { ConversionJob, FileAsset, Prisma } from "@prisma/client";
 import {
   createAiJobSchema,
   createConversionSchema,
+  uniqueConversionTargetsFor,
   type JobProgressEvent
 } from "@omniconvert/shared";
 import { prisma } from "../../lib/prisma.js";
@@ -81,23 +82,46 @@ conversionsRouter.post("/", requireAuth, async (req, res, next) => {
   try {
     const input = createConversionSchema.parse(req.body);
     const jobs = [];
+    const plannedJobs: Array<{
+      asset: FileAsset;
+      targetFormat: string;
+      options: (typeof input.files)[number]["options"];
+    }> = [];
 
     for (const file of input.files) {
       const asset = await prisma.fileAsset.findFirst({
         where: { id: file.uploadId, userId: req.authUser.id, kind: "ORIGINAL" }
       });
       if (!asset) throw new HttpError(404, `Upload not found: ${file.uploadId}`);
-      const targetFormat = assertConversionTarget(asset.extension, file.targetFormat);
+      const targetFormats =
+        file.targetFormat.trim().toLowerCase() === "all"
+          ? uniqueConversionTargetsFor(asset.extension)
+          : [file.targetFormat];
+      if (!targetFormats.length) throw new HttpError(415, `No supported conversion targets for ${asset.extension}`);
 
+      for (const requestedTarget of targetFormats) {
+        plannedJobs.push({
+          asset,
+          targetFormat: assertConversionTarget(asset.extension, requestedTarget),
+          options: file.options
+        });
+      }
+    }
+
+    if (plannedJobs.length > 100) {
+      throw new HttpError(422, "A conversion request can create up to 100 jobs");
+    }
+
+    for (const plannedJob of plannedJobs) {
       const job = await prisma.conversionJob.create({
         data: {
           userId: req.authUser.id,
           kind: "CONVERSION",
           status: "QUEUED",
-          sourceFormat: asset.extension,
-          targetFormat,
-          inputAssetId: asset.id,
-          options: file.options
+          sourceFormat: plannedJob.asset.extension,
+          targetFormat: plannedJob.targetFormat,
+          inputAssetId: plannedJob.asset.id,
+          options: plannedJob.options
         }
       });
 
