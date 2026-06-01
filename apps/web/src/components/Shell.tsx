@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
-import { Activity, FileCog, LayoutDashboard, Sparkles } from "lucide-react";
+import { Activity, ExternalLink, FileCog, LayoutDashboard, Sparkles } from "lucide-react";
 import clsx from "clsx";
 
 const links = [
@@ -11,6 +11,17 @@ const links = [
   { href: "/ai-tools", label: "AI Tools", icon: Sparkles },
   { href: "/history", label: "History", icon: Activity },
   { href: "/features", label: "Features", icon: FileCog }
+];
+
+const developerProducts = [
+  {
+    href: "https://nse-sentinelmax-msrfjdkwmksf6jama4jvmx.streamlit.app/",
+    label: "NSE Sentinel Max"
+  },
+  {
+    href: "https://edu-test-ai-rho.vercel.app/",
+    label: "Edu Test AI"
+  }
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -78,6 +89,28 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </header>
 
       <main>{children}</main>
+      <footer className="border-t border-white/10 bg-[#05070d]/78">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
+          <div>
+            <div className="text-xs font-black uppercase tracking-[0.22em] text-neon-cyan">More Product By Hritvik - Developer</div>
+            <div className="mt-1 text-xs font-bold text-slate-500">Explore more tools built by Hritvik.</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {developerProducts.map((product) => (
+              <a
+                key={product.href}
+                href={product.href}
+                target="_blank"
+                rel="noreferrer"
+                className="focus-ring inline-flex items-center gap-2 rounded-full border border-line px-4 py-2 text-xs font-black text-slate-200 transition hover:border-neon-cyan hover:bg-white/[0.04] hover:text-white"
+              >
+                {product.label}
+                <ExternalLink size={13} />
+              </a>
+            ))}
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
