@@ -4,8 +4,23 @@ import "./globals.css";
 import { Shell } from "../components/Shell";
 
 export const metadata: Metadata = {
+  applicationName: "OmniConvert AI",
   title: "OmniConvert AI",
-  description: "AI-powered universal file conversion platform with real backend processing engines."
+  description: "AI-powered universal file conversion platform with real backend processing engines.",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" }
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }]
+  },
+  appleWebApp: {
+    capable: true,
+    title: "OmniConvert AI",
+    statusBarStyle: "black-translucent"
+  }
 };
 
 function resolveClerkPublishableKey(): string {

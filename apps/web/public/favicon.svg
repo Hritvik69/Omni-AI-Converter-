@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="OmniConvert AI">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07141a"/>
+      <stop offset="0.55" stop-color="#070a12"/>
+      <stop offset="1" stop-color="#17100b"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="160" y1="124" x2="354" y2="392" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#39f5e8"/>
+      <stop offset="0.58" stop-color="#9b5cff"/>
+      <stop offset="1" stop-color="#b6ff68"/>
+    </linearGradient>
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.223 0 0 0 0 0.961 0 0 0 0 0.91 0 0 0 0.72 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+  <path d="M88 140h336M88 256h336M88 372h336M140 88v336M256 88v336M372 88v336" stroke="#ffffff" stroke-opacity="0.055" stroke-width="3"/>
+  <rect x="122" y="86" width="268" height="340" rx="46" fill="#f8fbff"/>
+  <path d="M310 86v78c0 17 14 31 31 31h49" fill="#dbe8f3"/>
+  <path d="M310 86v78c0 17 14 31 31 31h49" fill="none" stroke="#07101b" stroke-opacity="0.16" stroke-width="16" stroke-linejoin="round"/>
+  <g filter="url(#glow)">
+    <path d="M204 238c0-31 25-56 56-56h14l-18-18 25-25 62 62-62 62-25-25 18-18h-14c-10 0-18 8-18 18v18h-38v-18Z" fill="url(#mark)"/>
+    <path d="M308 274c0 31-25 56-56 56h-14l18 18-25 25-62-62 62-62 25 25-18 18h14c10 0 18-8 18-18v-18h38v18Z" fill="url(#mark)"/>
+  </g>
+  <circle cx="256" cy="256" r="118" fill="none" stroke="#07101b" stroke-opacity="0.16" stroke-width="18"/>
+  <circle cx="256" cy="256" r="118" fill="none" stroke="#39f5e8" stroke-opacity="0.42" stroke-width="8" stroke-dasharray="76 34"/>
+</svg>
