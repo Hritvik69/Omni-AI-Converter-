@@ -1,8 +1,8 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import path from "node:path";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { env } from "../config/env.js";
 
 export const s3 = new S3Client({
@@ -89,4 +89,19 @@ export async function putLocalFileToS3(args: {
     sizeBytes: fileStat.size,
     etag: result.ETag?.replaceAll('"', "")
   };
+}
+
+// Fix 3: Needed by process-conversion to remove a duplicate output object when
+// the atomic completion guard determines another worker already won the race.
+export async function deleteStoredObject(args: { storage: "S3" | "LOCAL"; bucket?: string | null; key: string }): Promise<void> {
+  if (args.storage === "LOCAL" || isLocalStorage()) {
+    await rm(localStoragePath(args.key), { force: true });
+    return;
+  }
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: args.bucket ?? env.S3_BUCKET,
+      Key: args.key
+    })
+  );
 }

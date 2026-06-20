@@ -3,9 +3,10 @@ import { stat } from "node:fs/promises";
 import { lookup as lookupMime } from "mime-types";
 import { conversionOptionsSchema, type AiToolId, type ConversionOptions } from "@omniconvert/shared";
 import { prisma } from "../lib/prisma.js";
-import { downloadS3ObjectToFile, putLocalFileToS3, storageKind } from "../lib/storage.js";
+import { deleteStoredObject, downloadS3ObjectToFile, putLocalFileToS3, storageKind } from "../lib/storage.js";
 import { withTempDir } from "../lib/temp.js";
 import { logger } from "../lib/logger.js";
+import { redisPub } from "../lib/redis.js";
 import { assertInputWithinResourceLimits } from "../lib/resource-limits.js";
 import { updateJobProgress } from "./progress.js";
 import { deliverJobWebhooks } from "./webhooks.js";
@@ -22,6 +23,8 @@ import {
   isVideo,
   normalizeExt
 } from "../engines/formats.js";
+
+const REALTIME_CHANNEL = "omniconvert:job-events";
 
 function outputMime(extension: string): string {
   if (extension === "srt") return "application/x-subrip";
@@ -232,20 +235,12 @@ export async function processConversionJob(
         }
       });
 
-      const latestJob = await prisma.conversionJob.findUnique({
-        where: { id: job.id },
-        select: { outputAssetId: true, status: true }
-      });
-      if (latestJob?.status === "COMPLETED" && latestJob.outputAssetId) {
-        logger.info({ conversionJobId: job.id, outputAssetId: latestJob.outputAssetId }, "Skipping duplicate completion");
-        return;
-      }
-
-      const assetId = latestJob?.outputAssetId ?? job.id;
+      // Fix 3: Create/update the output FileAsset unconditionally using job.id.
+      // We always use job.id as the asset ID so the upsert is idempotent.
       const asset = await prisma.fileAsset.upsert({
-        where: { id: assetId },
+        where: { id: job.id },
         create: {
-          id: assetId,
+          id: job.id,
           userId: job.userId,
           kind: "OUTPUT",
           storage: storageKind(),
@@ -279,14 +274,46 @@ export async function processConversionJob(
         }
       });
 
-      await updateJobProgress({
-        userId: job.userId,
-        jobId: job.id,
-        status: "completed",
-        progress: 100,
-        stage: "completed",
-        outputAssetId: asset.id
+      // Fix 3: Atomic final-status update — only succeeds if this worker still
+      // "owns" the job (status=RUNNING and startedAt matches what we captured at
+      // claim time). If another worker already completed the job, count will be 0
+      // and we clean up our output without publishing duplicate events.
+      const finalUpdate = await prisma.conversionJob.updateMany({
+        where: {
+          id: job.id,
+          status: "RUNNING",
+          startedAt: job.startedAt  // captured in claimQueuedJob
+        },
+        data: {
+          status: "COMPLETED",
+          progress: 100,
+          stage: "completed",
+          outputAssetId: asset.id,
+          completedAt: new Date()
+        }
       });
+
+      if (!finalUpdate.count) {
+        // Another worker already completed this job — discard our output
+        logger.info({ conversionJobId: job.id }, "Skipping duplicate completion");
+        await deleteStoredObject({ storage: storageKind(), bucket: stored.bucket, key: stored.key });
+        return;
+      }
+
+      // Publish realtime event and deliver webhooks only if we won the atomic update
+      await redisPub.publish(
+        REALTIME_CHANNEL,
+        JSON.stringify({
+          userId: job.userId,
+          event: {
+            jobId: job.id,
+            status: "completed",
+            progress: 100,
+            stage: "completed",
+            outputAssetId: asset.id
+          }
+        })
+      );
 
       await deliverJobWebhooks({
         userId: job.userId,

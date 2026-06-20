@@ -13,7 +13,13 @@ import { logger } from "../lib/logger.js";
 import { readUtf8FileLimited } from "../lib/resource-limits.js";
 import { repairPdf } from "./document.js";
 
-const MAX_TEXT_CHARS = 120000;
+// MAX_TEXT_CHARS controls how many characters of extracted text are sent to
+// the AI API per request. Reducing this is the single biggest lever for
+// cutting token costs without removing the AI call entirely.
+// 40,000 chars ≈ ~10,000 tokens — sufficient for all standard business documents.
+// The local fallback functions (localSummary / localAnalysisJson) always run
+// on the full extracted text, so long documents are still fully covered.
+const MAX_TEXT_CHARS = 40000; // reduced from 120,000 — saves ~66% token spend
 const MAX_TEXT_SOURCE_BYTES = 100 * 1024 * 1024;
 const GEMINI_TEXT_FALLBACKS = ["gemini-2.0-flash"];
 

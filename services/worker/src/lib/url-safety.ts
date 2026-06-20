@@ -2,7 +2,13 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import { env } from "../config/env.js";
 
-const blockedHostnames = new Set(["localhost", "localhost.localdomain"]);
+// Fix 6: Explicitly block cloud metadata hostnames in addition to the CIDR blocklist.
+const blockedHostnames = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+  "metadata.azure.com"
+]);
 
 function ipv4ToInt(address: string): number | null {
   const parts = address.split(".");

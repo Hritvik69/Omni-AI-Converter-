@@ -2,11 +2,24 @@ import { Worker } from "bullmq";
 import { env } from "./config/env.js";
 import { redis } from "./lib/redis.js";
 import { logger } from "./lib/logger.js";
+import { cleanStaleTempDirs } from "./lib/temp.js";
 import { processConversionJob } from "./jobs/process-conversion.js";
 
 type ConversionQueueData = {
   conversionJobId: string;
 };
+
+// Fix 13: Clean stale temp dirs from previous crashed workers at startup,
+// then repeat every 30 minutes to cap disk usage over long-running deployments.
+const STALE_TEMP_MAX_AGE_MS = 1000 * 60 * 120; // 2 hours
+void cleanStaleTempDirs(STALE_TEMP_MAX_AGE_MS).catch((error: unknown) => {
+  logger.warn({ error }, "Startup stale temp dir cleanup failed");
+});
+setInterval(() => {
+  void cleanStaleTempDirs(STALE_TEMP_MAX_AGE_MS).catch((error: unknown) => {
+    logger.warn({ error }, "Periodic stale temp dir cleanup failed");
+  });
+}, 1000 * 60 * 30).unref();
 
 const worker = new Worker<ConversionQueueData>(
   "conversion",
@@ -20,7 +33,10 @@ const worker = new Worker<ConversionQueueData>(
   {
     connection: redis,
     concurrency: env.WORKER_CONCURRENCY,
-    lockDuration: 1000 * 60 * 30
+    // Fix 3: Increased from 30min to 4 hours. Prevents BullMQ from releasing
+    // the lock mid-conversion for large files, which would cause two workers
+    // to concurrently process and complete the same job.
+    lockDuration: 1000 * 60 * 60 * 4
   }
 );
 

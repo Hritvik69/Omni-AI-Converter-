@@ -216,6 +216,13 @@ async function decryptTextToFile(text: string, password: string): Promise<{ byte
 
 export function AiToolsPanel() {
   const { getToken } = useAuth();
+
+  // Fix 7: Stabilize getToken reference so the WS effect doesn't reconnect on JWT refresh
+  const getTokenRef = useRef(getToken);
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   const [tool, setTool] = useState<ToolId>("ocr");
   const [fileMeta, setFileMeta] = useState<{ name: string; size: number; ext: string } | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -233,6 +240,8 @@ export function AiToolsPanel() {
   const isEncryptionTool = tool === "image-encryption";
   const isBusy = ["uploading", "queued", "running", "encrypting", "decrypting"].includes(status);
 
+  // Fix 1 + Fix 7: Token sent as auth frame after connection opens (not in URL).
+  // getToken read via ref — jobId is the only real dep that should trigger reconnect.
   useEffect(() => {
     let socket: WebSocket | null = null;
     let cancelled = false;
@@ -250,12 +259,16 @@ export function AiToolsPanel() {
 
     async function connect() {
       if (!isApiConfigured) return;
-      await warmAuthSession(getToken);
-      const token = await getOptionalAuthToken(getToken);
+      await warmAuthSession(getTokenRef.current);
       if (cancelled) return;
-      socket = new WebSocket(websocketUrl(token, getDemoSession()));
-      socket.onopen = () => {
+      // Fix 1: Token intentionally NOT in URL — sent as JSON auth frame on onopen
+      socket = new WebSocket(websocketUrl(getDemoSession()));
+      socket.onopen = async () => {
         attempt = 0;
+        const token = await getOptionalAuthToken(getTokenRef.current);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "auth", token: token ?? undefined }));
+        }
       };
       socket.onmessage = (message) => {
         let payload: {
@@ -290,13 +303,14 @@ export function AiToolsPanel() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [getToken, jobId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]); // Fix 7: getToken removed from deps — accessed via ref
 
   useEffect(() => {
     if (!jobId || !["queued", "running"].includes(status) || !isApiConfigured) return;
     let cancelled = false;
     const timer = setInterval(() => {
-      apiFetch<JobStateResponse>(`/api/conversions/${jobId}`, {}, getToken)
+      apiFetch<JobStateResponse>(`/api/conversions/${jobId}`, {}, getTokenRef.current)
         .then((result) => {
           if (cancelled) return;
           const nextStatus = normalizeJobStatus(result.job.status);
@@ -313,14 +327,16 @@ export function AiToolsPanel() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [getToken, jobId, status]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, status]); // Fix 7: getToken removed — accessed via ref
 
   useEffect(() => {
     if (status !== "completed" || !outputAssetId || downloadUrl) return;
-    apiFetch<{ downloadUrl: string }>(`/api/conversions/assets/${outputAssetId}/download`, {}, getToken)
+    apiFetch<{ downloadUrl: string }>(`/api/conversions/assets/${outputAssetId}/download`, {}, getTokenRef.current)
       .then((result) => setDownloadUrl(result.downloadUrl))
       .catch((caught) => setError(caught instanceof Error ? caught.message : "Download link failed"));
-  }, [downloadUrl, getToken, outputAssetId, status]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloadUrl, outputAssetId, status]); // Fix 7: getToken removed — accessed via ref
 
   useEffect(() => {
     return () => {
@@ -404,7 +420,7 @@ export function AiToolsPanel() {
       setStage("uploading source");
       const upload = await uploadFileInChunks({
         file: fileRef.current,
-        getToken,
+        getToken: getTokenRef.current,
         onProgress: (value) => setProgress(value)
       });
       setStage("queued");
@@ -419,7 +435,7 @@ export function AiToolsPanel() {
             options: {}
           })
         },
-        getToken
+        getTokenRef.current
       );
       setJobId(response.job.id);
       setStatus("queued");

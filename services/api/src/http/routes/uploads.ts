@@ -74,6 +74,31 @@ uploadsRouter.post("/:uploadId/complete", requireAuth, uploadRateLimit, async (r
 
     await scanForMalware(merged.mergedPath);
 
+    // Fix 11: Deduplicate uploads — if an identical file (same user + SHA-256)
+    // was already uploaded and is not expired, return the existing asset
+    // instead of creating a duplicate S3 object and FileAsset row.
+    if (merged.checksumSha256) {
+      const existingAsset = await prisma.fileAsset.findFirst({
+        where: {
+          userId: req.authUser.id,
+          checksumSha256: merged.checksumSha256,
+          kind: "ORIGINAL",
+          expiresAt: { gt: new Date() }
+        }
+      });
+      if (existingAsset) {
+        await deleteUploadSession(session);
+        return res.status(200).json({
+          assetId: existingAsset.id,
+          uploadId: session.uploadId,
+          fileName: existingAsset.originalName,
+          mimeType: existingAsset.mimeType,
+          extension: existingAsset.extension,
+          sizeBytes: Number(existingAsset.sizeBytes)
+        });
+      }
+    }
+
     const storageKey = `users/${req.authUser.id}/originals/${session.uploadId}/${sanitizeFileName(session.fileName)}`;
     const stored = await putLocalFileToS3({
       localPath: merged.mergedPath,

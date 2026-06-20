@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
+import dns from "node:dns/promises";
+import net from "node:net";
 import { resourceLimits } from "@omniconvert/shared";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { validateOutboundWebhookUrl } from "../lib/url-safety.js";
+import { isBlockedIpAddress, validateOutboundWebhookUrl } from "../lib/url-safety.js";
 
 async function readResponseBodyWithCap(response: Response): Promise<void> {
   if (!response.body) return;
@@ -32,6 +34,58 @@ async function markEndpointFailed(endpointId: string, reason: string): Promise<v
   });
 }
 
+/**
+ * Fix 6: DNS-pinned fetch for webhook delivery.
+ *
+ * Resolves the hostname to an IP at delivery time, validates it against the
+ * blocklist, then connects to that specific IP (setting Host header to the
+ * original hostname). This prevents DNS re-binding attacks where a hostname
+ * resolves to a public IP at registration time but to a private IP at delivery.
+ */
+async function fetchWithDnsPinning(
+  rawUrl: string,
+  init: RequestInit,
+  signal: AbortSignal
+): Promise<Response> {
+  const parsed = new URL(rawUrl);
+  const hostname = parsed.hostname;
+
+  // If the hostname is already an IP literal, validate directly
+  if (net.isIP(hostname)) {
+    if (isBlockedIpAddress(hostname)) {
+      throw new Error(`Webhook delivery blocked: ${hostname} is a private/reserved address`);
+    }
+    return fetch(rawUrl, { ...init, signal });
+  }
+
+  // Re-resolve DNS at delivery time (prevents TTL-0 re-binding)
+  const records = await dns.lookup(hostname, { all: true, verbatim: true });
+  if (!records.length) throw new Error(`Webhook host did not resolve: ${hostname}`);
+
+  // Validate every resolved IP — use the first non-blocked one
+  const safeRecord = records.find((r) => !isBlockedIpAddress(r.address));
+  if (!safeRecord) {
+    throw new Error(`Webhook delivery blocked: ${hostname} resolves to a private/reserved network`);
+  }
+
+  // Connect directly to the resolved IP to prevent TOCTOU re-resolution
+  const targetIp = safeRecord.address;
+  const isIPv6 = net.isIPv6(targetIp);
+  const ipLiteral = isIPv6 ? `[${targetIp}]` : targetIp;
+  const pinned = new URL(rawUrl);
+  pinned.hostname = ipLiteral;
+
+  return fetch(pinned.toString(), {
+    ...init,
+    signal,
+    headers: {
+      ...((init.headers as Record<string, string>) ?? {}),
+      // Preserve original Host header for the receiving server
+      Host: parsed.port ? `${hostname}:${parsed.port}` : hostname
+    }
+  });
+}
+
 export async function deliverJobWebhooks(args: {
   userId: string;
   jobId: string;
@@ -56,17 +110,22 @@ export async function deliverJobWebhooks(args: {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), resourceLimits.webhookTimeoutMs);
       try {
+        // Validate URL syntax and protocol at delivery time
         const url = await validateOutboundWebhookUrl(endpoint.url);
-        const response = await fetch(url, {
-          method: "POST",
-          redirect: "manual",
-          signal: controller.signal,
-          headers: {
-            "content-type": "application/json",
-            "x-omniconvert-signature": `sha256=${signature}`
+        // Fix 6: Use DNS-pinned fetch to prevent re-binding after validation
+        const response = await fetchWithDnsPinning(
+          url,
+          {
+            method: "POST",
+            redirect: "manual",
+            headers: {
+              "content-type": "application/json",
+              "x-omniconvert-signature": `sha256=${signature}`
+            },
+            body
           },
-          body
-        });
+          controller.signal
+        );
         await readResponseBodyWithCap(response);
         if (!response.ok) {
           logger.warn({ endpointId: endpoint.id, status: response.status }, "Webhook delivery failed");

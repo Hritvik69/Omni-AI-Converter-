@@ -28,7 +28,10 @@ export async function updateJobProgress(args: {
       stage: args.stage,
       error: args.error,
       outputAssetId: args.outputAssetId,
-      startedAt: args.status === "running" ? new Date() : undefined,
+      // Fix 10: startedAt is intentionally NOT set here.
+      // It is set exactly once in claimQueuedJob. Overwriting it on every
+      // RUNNING progress update would corrupt job duration metrics and could
+      // cause stale-job detection to incorrectly re-claim a running job.
       completedAt: args.status === "completed" || args.status === "failed" ? new Date() : undefined
     }
   });

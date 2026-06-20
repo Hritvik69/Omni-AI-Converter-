@@ -4,7 +4,7 @@ import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import archiver from "archiver";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import type { ConversionJob, FileAsset, Prisma } from "@prisma/client";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -106,6 +106,15 @@ async function failCreatedJobsAfterEnqueueError(jobs: Array<{ id: string; userId
   );
 }
 
+// Fix 14: RFC 6266-compliant Content-Disposition encoding.
+// Strips control characters and non-printable ASCII for the fallback name,
+// then encodes the full filename as RFC 5987 filename* to support Unicode.
+function safeContentDisposition(fileName: string): string {
+  const safe = fileName.replace(/[^\x20-\x7E]/g, "_").replace(/["%\\/]/g, "_");
+  const encoded = encodeURIComponent(fileName);
+  return `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`;
+}
+
 conversionsRouter.post("/", requireAuth, async (req, res, next) => {
   try {
     const input = createConversionSchema.parse(req.body);
@@ -116,6 +125,21 @@ conversionsRouter.post("/", requireAuth, async (req, res, next) => {
       : null;
     if (input.presetId && !preset) throw new HttpError(404, "Preset not found");
     const presetOptions = preset ? conversionOptionsSchema.parse(preset.options ?? {}) : {};
+
+    // Fix 2: Demo user job cap — prevents unlimited free conversions
+    const isDemoUser = req.authUser.clerkId.startsWith("demo-user:");
+    if (isDemoUser) {
+      const recentJobs = await prisma.conversionJob.count({
+        where: {
+          userId: req.authUser.id,
+          createdAt: { gte: new Date(Date.now() - 1000 * 60 * 60 * 24) }
+        }
+      });
+      const demoLimit = Number(process.env.DEMO_MAX_JOBS_PER_DAY ?? "5");
+      if (recentJobs >= demoLimit) {
+        throw new HttpError(429, "Demo quota exceeded. Sign up for a free account to continue.");
+      }
+    }
 
     const plannedJobs: Array<{
       asset: FileAsset;
@@ -206,6 +230,21 @@ conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
     });
     if (!asset) throw new HttpError(404, `Upload not found: ${input.uploadId}`);
 
+    // Fix 2: Demo user job cap on AI jobs
+    const isDemoUser = req.authUser.clerkId.startsWith("demo-user:");
+    if (isDemoUser) {
+      const recentJobs = await prisma.conversionJob.count({
+        where: {
+          userId: req.authUser.id,
+          createdAt: { gte: new Date(Date.now() - 1000 * 60 * 60 * 24) }
+        }
+      });
+      const demoLimit = Number(process.env.DEMO_MAX_JOBS_PER_DAY ?? "5");
+      if (recentJobs >= demoLimit) {
+        throw new HttpError(429, "Demo quota exceeded. Sign up for a free account to continue.");
+      }
+    }
+
     const targetByTool: Record<string, string> = {
       ocr: "txt",
       "pdf-summary": "txt",
@@ -217,6 +256,11 @@ conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
       "file-repair": asset.extension
     };
 
+    // Fix 17: Reject unknown AI tools instead of silently falling back to "txt"
+    if (!(input.tool in targetByTool)) {
+      throw new HttpError(422, `Unknown AI tool: ${input.tool}`);
+    }
+
     const jobId = uuidv4();
     const job = await prisma.conversionJob.create({
       data: {
@@ -226,7 +270,7 @@ conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
         status: "QUEUED",
         queueJobId: jobId,
         sourceFormat: asset.extension,
-        targetFormat: targetByTool[input.tool] ?? "txt",
+        targetFormat: targetByTool[input.tool]!,
         tool: input.tool,
         inputAssetId: asset.id,
         options: input.options
@@ -247,6 +291,9 @@ conversionsRouter.post("/ai", requireAuth, async (req, res, next) => {
   }
 });
 
+// Fix 5: History endpoint no longer generates signed download URLs inline.
+// Generating 100 signed URLs concurrently saturates the event loop (CPU-bound HMAC).
+// Clients should call /assets/:id/download on-demand when the user clicks download.
 conversionsRouter.get("/history", requireAuth, async (req, res, next) => {
   try {
     const jobs = await prisma.conversionJob.findMany({
@@ -257,34 +304,32 @@ conversionsRouter.get("/history", requireAuth, async (req, res, next) => {
     });
 
     res.json({
-      jobs: await Promise.all(
-        jobs.map(async (job) => ({
-          id: job.id,
-          kind: job.kind,
-          status: job.status,
-          progress: job.progress,
-          stage: job.stage,
-          sourceFormat: job.sourceFormat,
-          targetFormat: job.targetFormat,
-          tool: job.tool,
-          error: job.error,
-          createdAt: job.createdAt,
-          completedAt: job.completedAt,
-          input: {
-            id: job.inputAsset.id,
-            name: job.inputAsset.originalName,
-            sizeBytes: Number(job.inputAsset.sizeBytes)
-          },
-          output: job.outputAsset
-            ? {
-                id: job.outputAsset.id,
-                name: job.outputAsset.originalName,
-                sizeBytes: Number(job.outputAsset.sizeBytes),
-                downloadUrl: await assetDownloadUrl(req, job.outputAsset)
-              }
-            : null
-        }))
-      )
+      jobs: jobs.map((job) => ({
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        progress: job.progress,
+        stage: job.stage,
+        sourceFormat: job.sourceFormat,
+        targetFormat: job.targetFormat,
+        tool: job.tool,
+        error: job.error,
+        createdAt: job.createdAt,
+        completedAt: job.completedAt,
+        input: {
+          id: job.inputAsset.id,
+          name: job.inputAsset.originalName,
+          sizeBytes: Number(job.inputAsset.sizeBytes)
+        },
+        // Fix 5: Return outputAssetId only — client fetches download URL on-demand
+        output: job.outputAsset
+          ? {
+              id: job.outputAsset.id,
+              name: job.outputAsset.originalName,
+              sizeBytes: Number(job.outputAsset.sizeBytes)
+            }
+          : null
+      }))
     });
   } catch (error) {
     next(error);
@@ -325,7 +370,8 @@ conversionsRouter.get("/assets/:assetId/download-file", requireAuth, async (req,
     await stat(localPath);
     res.setHeader("Content-Type", asset.mimeType || "application/octet-stream");
     res.setHeader("Content-Length", Number(asset.sizeBytes).toString());
-    res.setHeader("Content-Disposition", `attachment; filename="${asset.originalName.replaceAll('"', "")}"`);
+    // Fix 14: Use RFC 5987-compliant Content-Disposition encoding
+    res.setHeader("Content-Disposition", safeContentDisposition(asset.originalName));
     createReadStream(localPath).pipe(res);
   } catch (error) {
     next(error);
@@ -369,6 +415,9 @@ conversionsRouter.get("/:id", requireAuth, async (req, res, next) => {
 
 conversionsRouter.post("/zip", requireAuth, async (req, res, next) => {
   try {
+    // Fix 4: 10-minute timeout for large ZIP exports
+    req.setTimeout(1000 * 60 * 10);
+
     const input = z.object({ jobIds: z.array(z.string().uuid()).min(1).max(100) }).parse(req.body);
     const jobs = await prisma.conversionJob.findMany({
       where: {
@@ -382,6 +431,39 @@ conversionsRouter.post("/zip", requireAuth, async (req, res, next) => {
 
     if (jobs.length === 0) throw new HttpError(404, "No completed outputs found for ZIP export");
 
+    // Fix 4: Validate all S3 objects exist BEFORE opening the response stream.
+    // This prevents sending a corrupt partial ZIP when an object is missing.
+    const s3Jobs = jobs.filter((job) => job.outputAsset && job.outputAsset.storage !== "LOCAL");
+    if (s3Jobs.length > 0) {
+      const headResults = await Promise.allSettled(
+        s3Jobs.map((job) =>
+          s3.send(
+            new HeadObjectCommand({
+              Bucket: job.outputAsset!.bucket ?? env.S3_BUCKET,
+              Key: job.outputAsset!.storageKey
+            })
+          )
+        )
+      );
+      const missingIndex = headResults.findIndex((r) => r.status === "rejected");
+      if (missingIndex !== -1) {
+        const missingJob = s3Jobs[missingIndex];
+        throw new HttpError(409, `Output asset is no longer available: ${missingJob?.outputAsset?.originalName ?? "unknown"}`);
+      }
+    }
+
+    // Fix 4: Deduplicate file names by appending asset ID prefix on collision
+    const usedNames = new Map<string, number>();
+    function uniqueFileName(originalName: string, assetId: string): string {
+      const count = usedNames.get(originalName) ?? 0;
+      usedNames.set(originalName, count + 1);
+      if (count === 0) return originalName;
+      const dotIdx = originalName.lastIndexOf(".");
+      const base = dotIdx >= 0 ? originalName.slice(0, dotIdx) : originalName;
+      const ext = dotIdx >= 0 ? originalName.slice(dotIdx) : "";
+      return `${base}-${assetId.slice(0, 6)}${ext}`;
+    }
+
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="omniconvert-results-${Date.now()}.zip"`);
 
@@ -391,9 +473,11 @@ conversionsRouter.post("/zip", requireAuth, async (req, res, next) => {
 
     for (const job of jobs) {
       if (!job.outputAsset) continue;
+      const fileName = uniqueFileName(job.outputAsset.originalName, job.outputAsset.id);
+
       if (job.outputAsset.storage === "LOCAL") {
         archive.append(createReadStream(localStoragePath(job.outputAsset.storageKey)), {
-          name: job.outputAsset.originalName
+          name: fileName
         });
         continue;
       }
@@ -404,8 +488,10 @@ conversionsRouter.post("/zip", requireAuth, async (req, res, next) => {
           Key: job.outputAsset.storageKey
         })
       );
+      // Fix 4: Guard against missing Body (deleted object between HeadObject and GetObject)
+      if (!object.Body) throw new Error(`S3 object body missing for asset ${job.outputAsset.id}`);
       archive.append(object.Body as Readable, {
-        name: job.outputAsset.originalName
+        name: fileName
       });
     }
 

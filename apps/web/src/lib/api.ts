@@ -108,12 +108,18 @@ export async function warmAuthSession(getToken?: AuthTokenGetter): Promise<void>
   await apiFetch<{ ok: boolean }>("/api/conversions/auth/session", {}, getToken).catch(() => undefined);
 }
 
-export function websocketUrl(token?: string | null, demoSession?: string | null): string {
+/**
+ * Returns the WebSocket URL for the realtime gateway.
+ * NOTE: The auth token is intentionally NOT included in the URL (Fix 1 — prevents
+ * token exposure in server access logs, browser history, and proxy logs).
+ * After connecting, the caller must send: { type: "auth", token: "<jwt>" }
+ * demoSession is kept in the URL because it is not a secret credential.
+ */
+export function websocketUrl(demoSession?: string | null): string {
   if (!isApiConfigured) return "";
   const base = new URL(API_URL);
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   base.pathname = "/ws";
-  if (token) base.searchParams.set("token", token);
-  if (!token && demoSession) base.searchParams.set("demoSession", demoSession);
+  if (demoSession) base.searchParams.set("demoSession", demoSession);
   return base.toString();
 }

@@ -37,12 +37,17 @@ webhooksRouter.post("/", requireAuth, async (req, res, next) => {
       throw new HttpError(422, `You can register up to ${resourceLimits.maxWebhookEndpointsPerUser} active webhook endpoints`);
     }
     const safeUrl = await validateUserWebhookUrl(input.url);
-    const secret = crypto.randomBytes(32).toString("hex");
+    // Fix 16: Generate secret; store only its SHA-256 hash.
+    // The plaintext secret is returned to the user exactly once here and is
+    // never written to the database, so a DB dump cannot expose signing keys.
+    // The worker uses the stored hash as the HMAC key for per-endpoint uniqueness.
+    const rawSecret = crypto.randomBytes(32).toString("hex");
+    const secretHash = crypto.createHash("sha256").update(rawSecret).digest("hex");
     const webhook = await prisma.webhookEndpoint.create({
       data: {
         userId: req.authUser.id,
         url: safeUrl,
-        secret
+        secret: secretHash // stored as hash — NOT plaintext
       }
     });
     res.status(201).json({
@@ -50,7 +55,8 @@ webhooksRouter.post("/", requireAuth, async (req, res, next) => {
         id: webhook.id,
         url: webhook.url,
         status: webhook.status,
-        secret
+        // Return the raw secret once — the user must save it; we cannot recover it
+        secret: rawSecret
       }
     });
   } catch (error) {

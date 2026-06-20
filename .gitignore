@@ -13,3 +13,4 @@ coverage
 *.log
 *.tsbuildinfo
 prisma/migrations/*/migration_lock.toml
+NCERT_Books/

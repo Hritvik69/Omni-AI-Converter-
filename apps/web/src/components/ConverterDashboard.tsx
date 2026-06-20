@@ -13,6 +13,7 @@ import {
   Loader2,
   Play,
   QrCode,
+  Save,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -21,6 +22,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import {
   API_NOT_CONFIGURED_MESSAGE,
+  API_URL,
   apiFetch,
   authHeaders,
   getDemoSession,
@@ -67,22 +69,45 @@ type JobStateResponse = {
   };
 };
 
+type Preset = {
+  id: string;
+  name: string;
+  target: string;
+  options: {
+    quality: number;
+    stripMetadata: boolean;
+    lossless: boolean;
+  };
+  createdAt: string;
+};
+
+type PresetsResponse = {
+  presets: Preset[];
+};
+
 const ALL_TARGETS_VALUE = "all";
 const START_CONVERSION_CONCURRENCY = 2;
 
+// Fix 15: Added `failed` flag — sibling workers stop on first task error
 async function runWithConcurrency<T>(
   items: T[],
   limit: number,
   task: (item: T) => Promise<void>
 ): Promise<void> {
   let nextIndex = 0;
+  let failed = false;
   const workerCount = Math.min(limit, items.length);
 
   async function worker(): Promise<void> {
-    while (nextIndex < items.length) {
+    while (nextIndex < items.length && !failed) {
       const item = items[nextIndex]!;
       nextIndex += 1;
-      await task(item);
+      try {
+        await task(item);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
     }
   }
 
@@ -111,12 +136,28 @@ function normalizeJobStatus(status: string): UploadRow["status"] {
 
 export function ConverterDashboard() {
   const { getToken } = useAuth();
+
+  // Fix 7: Stabilize getToken reference. Effects read getTokenRef.current() so
+  // they don't re-run (and tear down WebSocket) on every Clerk JWT refresh.
+  const getTokenRef = useRef(getToken);
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   const [rows, setRows] = useState<UploadRow[]>([]);
   const [dragging, setDragging] = useState(false);
   const [quality, setQuality] = useState(86);
   const [stripMetadata, setStripMetadata] = useState(true);
   const [lossless, setLossless] = useState(false);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [presetName, setPresetName] = useState("");
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [loadingPresets, setLoadingPresets] = useState(true);
   const fileStore = useRef(new Map<string, File>());
+
+  // Fix 15: Prevent duplicate in-flight download URL fetches per asset
+  const fetchingAssets = useRef(new Set<string>());
+
   const activeJobKey = useMemo(
     () =>
       rows
@@ -147,6 +188,9 @@ export function ConverterDashboard() {
     setRows((current) => [...nextRows, ...current]);
   }, []);
 
+  // Fix 1 + Fix 7: Empty dependency array — connect once on mount.
+  // getToken is accessed via getTokenRef.current() which is always current.
+  // The auth token is sent as a post-connection JSON frame (not in the URL).
   useEffect(() => {
     let socket: WebSocket | null = null;
     let cancelled = false;
@@ -164,12 +208,17 @@ export function ConverterDashboard() {
 
     async function connect() {
       if (!isApiConfigured) return;
-      await warmAuthSession(getToken);
-      const token = await getOptionalAuthToken(getToken);
+      await warmAuthSession(getTokenRef.current);
       if (cancelled) return;
-      socket = new WebSocket(websocketUrl(token, getDemoSession()));
-      socket.onopen = () => {
+      // Fix 1: Token intentionally NOT in URL. Sent as auth frame after onopen.
+      socket = new WebSocket(websocketUrl(getDemoSession()));
+      socket.onopen = async () => {
         attempt = 0;
+        // Send auth frame immediately after connection opens
+        const token = await getOptionalAuthToken(getTokenRef.current);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "auth", token: token ?? undefined }));
+        }
       };
       socket.onmessage = (message) => {
         let payload: {
@@ -215,15 +264,25 @@ export function ConverterDashboard() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [getToken]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Fix 7: empty deps — connect once on mount, token accessed via ref
 
+  // Fix 7 + Fix 12: getToken called once per poll cycle via ref; shared auth
+  // headers used for all job fetch calls instead of per-job token invocations.
   useEffect(() => {
     if (!isApiConfigured || !activeJobKey) return;
     let cancelled = false;
     const jobIds = activeJobKey.split(",").filter(Boolean);
     const poll = async () => {
+      // Fix 12: Single getToken call per poll cycle
+      const auth = await authHeaders(getTokenRef.current);
       const results = await Promise.allSettled(
-        jobIds.map((jobId) => apiFetch<JobStateResponse>(`/api/conversions/${jobId}`, {}, getToken))
+        jobIds.map((jobId) =>
+          fetch(`${API_URL}/api/conversions/${jobId}`, {
+            credentials: "include",
+            headers: { "content-type": "application/json", ...auth }
+          }).then((r) => r.json() as Promise<JobStateResponse>)
+        )
       );
       if (cancelled) return;
       setRows((current) =>
@@ -252,25 +311,96 @@ export function ConverterDashboard() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [activeJobKey, getToken]);
+  }, [activeJobKey]); // Fix 7: getToken removed from deps — accessed via ref
 
+  // Fix 7 + Fix 15: fetchingAssets ref prevents duplicate in-flight requests
+  // for the same asset when rows state updates trigger this effect multiple times.
   useEffect(() => {
     const completed = rows.filter((row) => row.status === "completed" && row.outputAssetId && !row.downloadUrl);
     for (const row of completed) {
-      apiFetch<{ downloadUrl: string }>(`/api/conversions/assets/${row.outputAssetId}/download`, {}, getToken)
+      const assetId = row.outputAssetId!;
+      if (fetchingAssets.current.has(assetId)) continue;
+      fetchingAssets.current.add(assetId);
+      apiFetch<{ downloadUrl: string }>(`/api/conversions/assets/${assetId}/download`, {}, getTokenRef.current)
         .then((result) => {
           setRows((current) => current.map((item) => (item.id === row.id ? { ...item, downloadUrl: result.downloadUrl } : item)));
         })
-        .catch((error) => {
-          setRows((current) => current.map((item) => (item.id === row.id ? { ...item, error: error.message } : item)));
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "Download URL fetch failed";
+          setRows((current) => current.map((item) => (item.id === row.id ? { ...item, error: message } : item)));
+        })
+        .finally(() => {
+          fetchingAssets.current.delete(assetId);
         });
     }
-  }, [rows, getToken]);
+  }, [rows]); // Fix 7: getToken removed from deps — accessed via ref
+
+  useEffect(() => {
+    loadPresets();
+  }, []);
+
+  async function loadPresets() {
+    if (!isApiConfigured) {
+      setLoadingPresets(false);
+      return;
+    }
+    try {
+      const result = await apiFetch<PresetsResponse>("/api/presets", {}, getTokenRef.current);
+      setPresets(result.presets);
+    } catch {
+      // ignore errors
+    } finally {
+      setLoadingPresets(false);
+    }
+  }
+
+  async function savePreset() {
+    if (!presetName.trim() || savingPreset || !isApiConfigured) return;
+    setSavingPreset(true);
+    try {
+      await apiFetch<{ preset: Preset }>(
+        "/api/presets",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: presetName.trim(),
+            target: rows[0]?.extension ?? "pdf",
+            options: { quality, stripMetadata, lossless }
+          })
+        },
+        getTokenRef.current
+      );
+      setPresetName("");
+      await loadPresets();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save preset";
+      alert(message);
+    } finally {
+      setSavingPreset(false);
+    }
+  }
+
+  async function deletePreset(id: string) {
+    if (!isApiConfigured) return;
+    try {
+      await apiFetch(`/api/presets/${id}`, { method: "DELETE" }, getTokenRef.current);
+      setPresets((current) => current.filter((p) => p.id !== id));
+    } catch {
+      // ignore errors
+    }
+  }
+
+  function applyPreset(preset: Preset) {
+    setQuality(preset.options.quality ?? 86);
+    setStripMetadata(preset.options.stripMetadata ?? true);
+    setLossless(preset.options.lossless ?? false);
+  }
 
   const activeCount = useMemo(() => rows.filter((row) => ["uploading", "queued", "running"].includes(row.status)).length, [rows]);
   const completedCount = useMemo(() => rows.filter((row) => row.status === "completed").length, [rows]);
 
-  async function startConversions() {
+  // Fix 7: useCallback gives a stable reference; deps are the values this closure reads
+  const startConversions = useCallback(async () => {
     if (!isApiConfigured) {
       setRows((current) =>
         current.map((item) =>
@@ -300,7 +430,7 @@ export function ConverterDashboard() {
         setRows((current) => current.map((item) => (item.id === row.id ? { ...item, status: "uploading", stage: "uploading chunks", progress: 1 } : item)));
         const upload = await uploadFileInChunks({
           file,
-          getToken,
+          getToken: getTokenRef.current,
           onProgress: (percent) =>
             setRows((current) => current.map((item) => (item.id === row.id ? { ...item, progress: percent } : item)))
         });
@@ -322,7 +452,7 @@ export function ConverterDashboard() {
                 }))
             })
           },
-          getToken
+          getTokenRef.current
         );
         if (targetFormats.length === 1) {
           const jobId = response.jobs[0]?.id;
@@ -353,7 +483,8 @@ export function ConverterDashboard() {
         setRows((current) => current.map((item) => (item.id === row.id ? { ...item, status: "failed", stage: "failed", error: message } : item)));
       }
     });
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, quality, stripMetadata, lossless]); // Fix 7: stable callback
 
   function removeRow(id: string) {
     fileStore.current.delete(id);
@@ -364,8 +495,8 @@ export function ConverterDashboard() {
     const jobIds = rows.filter((row) => row.status === "completed" && row.jobId).map((row) => row.jobId!);
     if (!jobIds.length) return;
     if (!isApiConfigured) throw new Error(API_NOT_CONFIGURED_MESSAGE);
-    const auth = await authHeaders(getToken);
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/conversions/zip`, {
+    const auth = await authHeaders(getTokenRef.current);
+    const response = await fetch(`${API_URL}/api/conversions/zip`, {
       method: "POST",
       credentials: "include",
       headers: {
@@ -552,6 +683,55 @@ export function ConverterDashboard() {
                 Lossless image mode
                 <input type="checkbox" checked={lossless} onChange={(event) => setLossless(event.target.checked)} className="accent-neon-cyan" />
               </label>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={presetName}
+                  onChange={(event) => setPresetName(event.target.value)}
+                  placeholder="Preset name"
+                  className="focus-ring flex-1 rounded-lg border border-line bg-ink px-3 py-2 text-xs font-bold text-white placeholder:text-slate-500"
+                />
+                <button
+                  onClick={savePreset}
+                  disabled={!presetName.trim() || savingPreset || !isApiConfigured}
+                  className="focus-ring inline-flex items-center gap-2 rounded-lg bg-neon-cyan px-3 py-2 text-xs font-black text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Save size={14} />
+                  {savingPreset ? "Saving..." : "Save"}
+                </button>
+              </div>
+
+              {loadingPresets ? (
+                <div className="text-xs text-slate-500 text-center py-2">Loading presets...</div>
+              ) : presets.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Saved Presets</div>
+                  {presets.map((preset) => (
+                    <div key={preset.id} className="flex items-center justify-between rounded-lg border border-line bg-white/[0.03] px-3 py-2 text-xs">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <button
+                          onClick={() => applyPreset(preset)}
+                          className="flex-1 text-left truncate font-bold text-white hover:text-neon-cyan transition"
+                        >
+                          {preset.name}
+                        </button>
+                        <span className="text-slate-500 whitespace-nowrap">{preset.target.toUpperCase()} · Q:{preset.options.quality}</span>
+                      </div>
+                      <button
+                        onClick={() => deletePreset(preset.id)}
+                        className="focus-ring rounded-lg border border-line px-2 py-1 text-slate-400 hover:border-neon-rose hover:text-neon-rose"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500 text-center py-2">No presets saved yet</div>
+              )}
             </div>
           </section>
 

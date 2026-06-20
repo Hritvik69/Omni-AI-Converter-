@@ -78,6 +78,8 @@ model FileAsset {
 
   @@index([userId, createdAt])
   @@index([storageKey])
+  // Fix 11: Supports deduplication query — findFirst by (userId, checksumSha256, kind, expiresAt)
+  @@index([userId, checksumSha256])
 }
 
 model ConversionJob {

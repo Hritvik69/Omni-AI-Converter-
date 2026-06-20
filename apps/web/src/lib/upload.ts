@@ -24,6 +24,9 @@ type UploadCompleteResponse = {
 const UPLOAD_CHUNK_CONCURRENCY = 3;
 const UPLOAD_REQUEST_TIMEOUT_MS = 120000;
 
+// Fix 15: Capture index before incrementing so concurrent workers in the same
+// microtask tick never read the same nextIndex value. Also propagates the first
+// error to siblings via firstError flag so they stop early.
 async function runWithConcurrency<T>(
   items: T[],
   limit: number,
@@ -35,8 +38,9 @@ async function runWithConcurrency<T>(
 
   async function worker(): Promise<void> {
     while (nextIndex < items.length && !firstError) {
-      const item = items[nextIndex]!;
+      const index = nextIndex; // Fix 15: capture before increment
       nextIndex += 1;
+      const item = items[index]!;
       try {
         await task(item);
       } catch (error) {

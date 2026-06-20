@@ -51,6 +51,22 @@ export async function cleanupExpiredAssets(now = new Date(), limit = 500): Promi
   for (const asset of assets) {
     try {
       if (asset.kind === "ORIGINAL") {
+        // Fix 18: Never delete an input asset that has QUEUED or RUNNING jobs.
+        // Doing so would cascade-delete the job record (onDelete: Restrict) or
+        // leave the worker with a missing file, causing it to fail mid-flight.
+        const activeJobCount = await prisma.conversionJob.count({
+          where: {
+            inputAssetId: asset.id,
+            status: { in: ["QUEUED", "RUNNING"] }
+          }
+        });
+        if (activeJobCount > 0) {
+          logger.warn(
+            { assetId: asset.id, activeJobCount },
+            "Skipping expired ORIGINAL asset — has active jobs referencing it"
+          );
+          continue;
+        }
         await prisma.conversionJob.deleteMany({ where: { inputAssetId: asset.id } });
       } else {
         await prisma.conversionJob.updateMany({

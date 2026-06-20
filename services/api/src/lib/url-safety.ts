@@ -3,7 +3,15 @@ import net from "node:net";
 import { env, isProduction } from "../config/env.js";
 import { HttpError } from "../http/middleware/errors.js";
 
-const blockedHostnames = new Set(["localhost", "localhost.localdomain"]);
+// Fix 6: Explicitly block cloud metadata hostnames in addition to the CIDR blocklist.
+// 169.254.169.254 is already covered by 169.254.0.0/16 in isBlockedIpAddress,
+// but hostname-level blocking adds defence-in-depth against DNS tricks.
+const blockedHostnames = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+  "metadata.azure.com"
+]);
 
 function ipv4ToInt(address: string): number | null {
   const parts = address.split(".");

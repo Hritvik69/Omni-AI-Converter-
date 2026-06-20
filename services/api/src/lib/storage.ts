@@ -98,13 +98,22 @@ export async function putLocalFileToS3(args: {
 }
 
 export async function getDownloadUrl(args: { bucket?: string | null; key: string; fileName?: string }): Promise<string> {
+  // Fix 14: Use RFC 5987 encoding (filename*=UTF-8'') for non-ASCII filenames.
+  // The fallback ASCII name strips control chars, quotes, and non-printable
+  // characters to prevent Content-Disposition header injection.
+  function rfc5987ContentDisposition(fileName: string): string {
+    const safe = fileName.replace(/[^\x20-\x7E]/g, "_").replace(/["\\%/]/g, "_");
+    const encoded = encodeURIComponent(fileName);
+    return `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`;
+  }
+
   return getSignedUrl(
     s3DownloadClient,
     new GetObjectCommand({
       Bucket: args.bucket ?? env.S3_BUCKET,
       Key: args.key,
       ResponseContentDisposition: args.fileName
-        ? `attachment; filename="${args.fileName.replaceAll('"', "")}"`
+        ? rfc5987ContentDisposition(args.fileName)
         : undefined
     }),
     { expiresIn: env.SIGNED_URL_TTL_SECONDS }

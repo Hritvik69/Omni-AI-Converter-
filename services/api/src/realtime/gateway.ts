@@ -37,33 +37,82 @@ async function resolveUserIdFromToken(token?: string, cookieHeader?: string, dem
   return user.id;
 }
 
+const AUTH_HANDSHAKE_TIMEOUT_MS = 5000;
+
 export function attachRealtimeGateway(server: Server): void {
   const wss = new WebSocketServer({ server, path: "/ws" });
   const clients = new Set<ClientRecord>();
 
-  wss.on("connection", async (socket, request) => {
-    try {
-      const url = new URL(request.url ?? "/ws", "http://localhost");
-      const token = url.searchParams.get("token") ?? undefined;
-      const demoSession = url.searchParams.get("demoSession") ?? undefined;
-      const userId = await resolveUserIdFromToken(token, request.headers.cookie, demoSession);
+  wss.on("connection", (socket, request) => {
+    // Parse demoSession from URL — it is not a secret credential
+    const url = new URL(request.url ?? "/ws", "http://localhost");
+    const demoSession = url.searchParams.get("demoSession") ?? undefined;
+    const cookieHeader = request.headers.cookie;
 
-      if (!userId) {
+    // NOTE: token is intentionally NOT read from URL params (Fix 1).
+    // Authentication is performed via a post-connection JSON frame.
+    let authenticated = false;
+
+    const authTimeout = setTimeout(() => {
+      if (!authenticated) {
         socket.close(1008, "Unauthorized");
+      }
+    }, AUTH_HANDSHAKE_TIMEOUT_MS);
+
+    socket.on("message", (raw) => {
+      // Only process the auth frame; ignore all other messages before auth
+      if (authenticated) return;
+
+      let frame: unknown;
+      try {
+        frame = JSON.parse(String(raw));
+      } catch {
         return;
       }
 
-      const record = { userId, socket };
-      clients.add(record);
-      socket.send(JSON.stringify({ type: "connected" }));
+      if (
+        typeof frame !== "object" ||
+        frame === null ||
+        (frame as Record<string, unknown>)["type"] !== "auth"
+      ) {
+        return;
+      }
 
-      socket.on("close", () => {
-        clients.delete(record);
-      });
-    } catch (error) {
-      logger.warn({ error }, "WebSocket authorization failed");
+      const token = (frame as Record<string, unknown>)["token"];
+      const authToken = typeof token === "string" ? token : undefined;
+
+      // Resolve userId asynchronously; close on failure
+      resolveUserIdFromToken(authToken, cookieHeader, demoSession)
+        .then((userId) => {
+          clearTimeout(authTimeout);
+          if (!userId) {
+            socket.close(1008, "Unauthorized");
+            return;
+          }
+          authenticated = true;
+          const record: ClientRecord = { userId, socket };
+          clients.add(record);
+          socket.send(JSON.stringify({ type: "connected" }));
+          socket.on("close", () => {
+            clients.delete(record);
+          });
+        })
+        .catch((error: unknown) => {
+          clearTimeout(authTimeout);
+          logger.warn({ error }, "WebSocket authorization failed");
+          socket.close(1008, "Unauthorized");
+        });
+    });
+
+    socket.on("close", () => {
+      // If the socket closes before auth completes, clear the timeout
+      clearTimeout(authTimeout);
+    });
+
+    socket.on("error", () => {
+      clearTimeout(authTimeout);
       socket.close(1008, "Unauthorized");
-    }
+    });
   });
 
   redisSub.subscribe(REALTIME_CHANNEL).catch((error: unknown) => {
